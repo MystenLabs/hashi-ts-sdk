@@ -139,6 +139,66 @@ describe("HashiClient", () => {
     });
 
     describe("view", () => {
+        describe("mpcPublicKey", () => {
+            it("returns the 33-byte compressed MPC key", async () => {
+                vi.spyOn(Hashi, "get").mockResolvedValueOnce({
+                    json: {
+                        id: HASHI_OBJECT_ID,
+                        committee_set: {
+                            members: HASHI_OBJECT_ID,
+                            epoch: 0n,
+                            committees: HASHI_OBJECT_ID,
+                            pending_epoch_change: null,
+                            mpc_public_key: Array.from(TEST_MPC_KEY),
+                        },
+                        config: {
+                            config: { contents: [] },
+                            enabled_versions: { contents: [] },
+                            upgrade_cap: null,
+                        },
+                        treasury: { objects: HASHI_OBJECT_ID },
+                        proposals: HASHI_OBJECT_ID,
+                        tob: HASHI_OBJECT_ID,
+                        num_consumed_presigs: 0n,
+                    },
+                } as never);
+
+                const key = await client.hashi.view.mpcPublicKey();
+                expect(key).toBeInstanceOf(Uint8Array);
+                expect(key.length).toBe(33);
+                expect(key[0]).toBeOneOf([0x02, 0x03]); // valid compressed prefix
+                expect(key).toEqual(TEST_MPC_KEY);
+            });
+
+            it("throws when DKG has not completed", async () => {
+                vi.spyOn(Hashi, "get").mockResolvedValueOnce({
+                    json: {
+                        id: HASHI_OBJECT_ID,
+                        committee_set: {
+                            members: HASHI_OBJECT_ID,
+                            epoch: 0n,
+                            committees: HASHI_OBJECT_ID,
+                            pending_epoch_change: null,
+                            mpc_public_key: [],
+                        },
+                        config: {
+                            config: { contents: [] },
+                            enabled_versions: { contents: [] },
+                            upgrade_cap: null,
+                        },
+                        treasury: { objects: HASHI_OBJECT_ID },
+                        proposals: HASHI_OBJECT_ID,
+                        tob: HASHI_OBJECT_ID,
+                        num_consumed_presigs: 0n,
+                    },
+                } as never);
+
+                await expect(client.hashi.view.mpcPublicKey()).rejects.toThrow(
+                    "MPC public key not available",
+                );
+            });
+        });
+
         it.todo("bitcoinDepositMinimum");
         it.todo("bitcoinWithdrawalMinimum");
         it.todo("bitcoinConfirmationThreshold");

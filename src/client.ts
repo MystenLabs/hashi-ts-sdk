@@ -27,9 +27,13 @@ export function hashi<const Name = "hashi">({
 }
 
 export class HashiClient {
+    // TODO: make sure that this client is gRPC. 
     #client: ClientWithCoreApi;
+    // TODO: The hashi object id should be hard-coded depending on mainnet/testnet/devnet or the user could provide a custom one.
     #hashiObjectId: string;
-    #network: BitcoinNetwork;
+    // TODO: network should be either mainnet, testnet or devnet like sui.
+    //  Then, each option can be mapped to the bitcoin network equivalent. E.g. devnet -> signet
+    #network: BitcoinNetwork; 
 
     constructor({
         client,
@@ -67,28 +71,11 @@ export class HashiClient {
         /** Override the default Bitcoin network for this call. */
         network?: BitcoinNetwork;
     }): Promise<string> {
-        const mpcKey = await this.#fetchMpcPublicKey();
+        const mpcKey = await this.view.mpcPublicKey();
 
         const addressBytes = fromHex(suiAddress);
 
         return generateDepositAddressRaw(mpcKey, addressBytes, network);
-    }
-
-    async #fetchMpcPublicKey(): Promise<Uint8Array> {
-        const result = await Hashi.get({
-            client: this.#client,
-            objectId: this.#hashiObjectId,
-        });
-
-        const mpcKey = new Uint8Array(result.json.committee_set.mpc_public_key);
-
-        if (mpcKey.length === 0) {
-            throw new Error(
-                "MPC public key not available on-chain. Has the committee completed DKG?",
-            );
-        }
-
-        return mpcKey;
     }
 
     async deposit() {}
@@ -101,6 +88,33 @@ export class HashiClient {
     call = {};
 
     view = {
+        /**
+         * Fetches the MPC committee's threshold public key from on-chain.
+         *
+         * This is the 33-byte compressed secp256k1 key stored in `CommitteeSet.mpc_public_key`.
+         * It is set after the committee completes DKG and is updated at epoch boundaries.
+         *
+         * @returns 33-byte compressed secp256k1 public key
+         * @throws If the MPC key is not yet available (DKG not completed)
+         */
+        mpcPublicKey: async (): Promise<Uint8Array> => {
+            const result = await Hashi.get({
+                client: this.#client,
+                objectId: this.#hashiObjectId,
+            });
+
+            const mpcKey = new Uint8Array(
+                result.json.committee_set.mpc_public_key,
+            );
+
+            if (mpcKey.length === 0) {
+                throw new Error(
+                    "MPC public key not available on-chain. Has the committee completed DKG?",
+                );
+            }
+
+            return mpcKey;
+        },
         // TODO: implement Governance-related view methods
         bitcoinDepositMinimum: async (): Promise<bigint> => {
             throw new Error("TODO");
