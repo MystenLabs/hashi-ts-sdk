@@ -27,13 +27,13 @@ export function hashi<const Name = "hashi">({
 }
 
 export class HashiClient {
-    // TODO: make sure that this client is gRPC. 
+    // TODO: make sure that this client is gRPC.
     #client: ClientWithCoreApi;
     // TODO: The hashi object id should be hard-coded depending on mainnet/testnet/devnet or the user could provide a custom one.
     #hashiObjectId: string;
     // TODO: network should be either mainnet, testnet or devnet like sui.
     //  Then, each option can be mapped to the bitcoin network equivalent. E.g. devnet -> signet
-    #network: BitcoinNetwork; 
+    #network: BitcoinNetwork;
 
     constructor({
         client,
@@ -103,9 +103,7 @@ export class HashiClient {
                 objectId: this.#hashiObjectId,
             });
 
-            const mpcKey = new Uint8Array(
-                result.json.committee_set.mpc_public_key,
-            );
+            const mpcKey = new Uint8Array(result.json.committee_set.mpc_public_key);
 
             if (mpcKey.length === 0) {
                 throw new Error(
