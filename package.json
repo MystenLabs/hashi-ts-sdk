@@ -6,7 +6,7 @@
     "scripts": {
         "start": "node index.js",
         "test": "echo \"Error: no test specified\" && exit 1",
-        "codegen": "sui move summary --path hashi/packages/hashi/ && sui-ts-codegen generate",
+        "codegen": "sui-ts-codegen generate",
         "format": "prettier --write \"**/*.{ts,json,md}\" \"!hashi/**\""
     },
     "keywords": [],
