@@ -1,23 +1,9 @@
 import type { ClientWithCoreApi } from "@mysten/sui/client";
 import { fromHex } from "@mysten/sui/utils";
 import { Hashi } from "./contracts/hashi/hashi.js";
-import {
-    generateDepositAddress as generateDepositAddressRaw,
-    type BitcoinNetwork,
-} from "./bitcoin.js";
+import { generateDepositAddress as generateDepositAddressRaw } from "./bitcoin.js";
 import { NETWORK_CONFIG } from "./constants.js";
-
-export type SuiNetwork = "devnet" | "testnet" | "mainnet";
-
-export interface HashiClientOptions<Name = "HashiClient"> {
-    name?: Name;
-    /** Sui network — determines Hashi object IDs and default Bitcoin network. */
-    network: SuiNetwork;
-    /** Override the auto-resolved Hashi shared object ID (for custom/local deployments). */
-    hashiObjectId?: string;
-    /** Override the auto-resolved Bitcoin network for address encoding. */
-    bitcoinNetwork?: BitcoinNetwork;
-}
+import type { BitcoinNetwork, HashiClientOptions, SuiNetwork } from "./types.js";
 
 export function hashi<const Name = "hashi">({
     name = "hashi" as Name,

@@ -15,11 +15,7 @@ import { concatBytes } from "@noble/hashes/utils.js";
 import { bech32m } from "@scure/base";
 import { NETWORK_HRP, NUMS_KEY } from "./constants.js";
 
-// ---------------------------------------------------------------------------
-//  Types & Constants
-// ---------------------------------------------------------------------------
-
-export type BitcoinNetwork = "mainnet" | "testnet" | "signet" | "regtest";
+import type { BitcoinNetwork } from "./types.js";
 
 const Point = secp256k1.Point;
 const CURVE_ORDER = Point.CURVE().n;

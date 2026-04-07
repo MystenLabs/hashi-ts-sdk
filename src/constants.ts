@@ -1,11 +1,4 @@
-import type { BitcoinNetwork } from "./bitcoin.js";
-import type { SuiNetwork } from "./client.js";
-
-export interface NetworkConfig {
-    hashiObjectId: string;
-    packageId: string;
-    bitcoinNetwork: BitcoinNetwork;
-}
+import type { BitcoinNetwork, NetworkConfig, SuiNetwork } from "./types.js";
 
 export const NETWORK_HRP: Record<BitcoinNetwork, string> = {
     mainnet: "bc",
