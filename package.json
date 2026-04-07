@@ -12,12 +12,14 @@
     "keywords": [],
     "author": "Mysten Labs <build@mystenlabs.com>",
     "license": "Apache-2.0",
+    "packageManager": "pnpm@10.33.0",
     "peerDependencies": {
         "@mysten/codegen": "^0.8.3",
         "@mysten/sui": "^2.14.1"
-	},
-	"devDependencies": {
-	    "@mysten/codegen": "^0.8.3",
-		"@mysten/sui": "^2.14.1"
-	}
+    },
+    "devDependencies": {
+        "@mysten/codegen": "^0.8.3",
+        "@mysten/sui": "^2.14.1",
+        "prettier": "^3.8.1"
+    }
 }
