@@ -23,13 +23,13 @@ export class HashiClient {
     constructor({ client }: { client: ClientWithCoreApi }) {
         this.#client = client;
     }
-    
+
     async generateDepositAddress() {}
+    
     async deposit() {}
     async withdraw() {}
     async requestSignetFaucet() {}
-
-    // Transaction builders
+    
     tx = {};
     
     // Move call helpers - use generated functions with typed options 

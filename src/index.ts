@@ -1,1 +1,2 @@
-// TODO: use this module to export whatever we need our external interface to be.
+export { HashiClient, hashi } from './client.js';
+export type { HashiClientOptions } from './client.js';
