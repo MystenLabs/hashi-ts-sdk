@@ -6,12 +6,30 @@ import {
     type BitcoinNetwork,
 } from "./bitcoin.js";
 
+export type SuiNetwork = "devnet" | "testnet" | "mainnet";
+
+interface NetworkConfig {
+    hashiObjectId: string;
+    packageId: string;
+    bitcoinNetwork: BitcoinNetwork;
+}
+
+const NETWORK_CONFIG: Partial<Record<SuiNetwork, NetworkConfig>> = {
+    devnet: {
+        hashiObjectId: "0x4bf35fb393067d0502b9a976f2753add04b69b58d6ca948e8d452b650f609a87",
+        packageId: "0xeef9dd622a37cbb614f06faa83abfb870eebc50a4c997ba0d2d86171123c0a08",
+        bitcoinNetwork: "signet",
+    },
+};
+
 export interface HashiClientOptions<Name = "HashiClient"> {
     name?: Name;
-    /** Object ID of the shared Hashi object on Sui. */
-    hashiObjectId: string;
-    /** Bitcoin network for address encoding (default: `"testnet"`). */
-    network?: BitcoinNetwork;
+    /** Sui network — determines Hashi object IDs and default Bitcoin network. */
+    network: SuiNetwork;
+    /** Override the auto-resolved Hashi shared object ID (for custom/local deployments). */
+    hashiObjectId?: string;
+    /** Override the auto-resolved Bitcoin network for address encoding. */
+    bitcoinNetwork?: BitcoinNetwork;
 }
 
 export function hashi<const Name = "hashi">({
@@ -27,26 +45,31 @@ export function hashi<const Name = "hashi">({
 }
 
 export class HashiClient {
-    // TODO: make sure that this client is gRPC.
     #client: ClientWithCoreApi;
-    // TODO: The hashi object id should be hard-coded depending on mainnet/testnet/devnet or the user could provide a custom one.
     #hashiObjectId: string;
-    // TODO: network should be either mainnet, testnet or devnet like sui.
-    //  Then, each option can be mapped to the bitcoin network equivalent. E.g. devnet -> signet
-    #network: BitcoinNetwork;
+    #bitcoinNetwork: BitcoinNetwork;
 
     constructor({
         client,
+        network,
         hashiObjectId,
-        network = "testnet",
+        bitcoinNetwork,
     }: {
         client: ClientWithCoreApi;
-        hashiObjectId: string;
-        network?: BitcoinNetwork;
+        network: SuiNetwork;
+        hashiObjectId?: string;
+        bitcoinNetwork?: BitcoinNetwork;
     }) {
+        const config = NETWORK_CONFIG[network];
+        const resolvedObjectId = hashiObjectId ?? config?.hashiObjectId;
+        if (!resolvedObjectId) {
+            throw new Error(
+                `Hashi is not yet supported on Sui ${network}. Provide a custom hashiObjectId.`,
+            );
+        }
         this.#client = client;
-        this.#hashiObjectId = hashiObjectId;
-        this.#network = network;
+        this.#hashiObjectId = resolvedObjectId;
+        this.#bitcoinNetwork = bitcoinNetwork ?? config?.bitcoinNetwork ?? "testnet";
     }
 
     /**
@@ -64,18 +87,16 @@ export class HashiClient {
      */
     async generateDepositAddress({
         suiAddress,
-        network = this.#network,
+        bitcoinNetwork = this.#bitcoinNetwork,
     }: {
         /** The Sui address to generate a deposit address for (hex string with 0x prefix). */
         suiAddress: string;
         /** Override the default Bitcoin network for this call. */
-        network?: BitcoinNetwork;
+        bitcoinNetwork?: BitcoinNetwork;
     }): Promise<string> {
         const mpcKey = await this.view.mpcPublicKey();
-
         const addressBytes = fromHex(suiAddress);
-
-        return generateDepositAddressRaw(mpcKey, addressBytes, network);
+        return generateDepositAddressRaw(mpcKey, addressBytes, bitcoinNetwork);
     }
 
     async deposit() {}

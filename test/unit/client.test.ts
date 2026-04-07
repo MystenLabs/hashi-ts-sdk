@@ -22,7 +22,13 @@ describe("HashiClient", () => {
         client = new SuiGrpcClient({
             network: "devnet",
             baseUrl: "https://fullnode.devnet.sui.io:443",
-        }).$extend(hashi({ hashiObjectId: HASHI_OBJECT_ID, network: "regtest" }));
+        }).$extend(
+            hashi({
+                network: "devnet",
+                hashiObjectId: HASHI_OBJECT_ID,
+                bitcoinNetwork: "regtest",
+            }),
+        );
     });
 
     describe("generateDepositAddress", () => {
@@ -120,7 +126,7 @@ describe("HashiClient", () => {
             // Client default is regtest, but we override to testnet
             const addr = await client.hashi.generateDepositAddress({
                 suiAddress: TEST_SUI_ADDRESS,
-                network: "testnet",
+                bitcoinNetwork: "testnet",
             });
             expect(addr).toMatch(/^tb1p/);
         });
@@ -136,6 +142,40 @@ describe("HashiClient", () => {
 
     describe("requestSignetFaucet", () => {
         it.todo("requests BTC from the signet faucet");
+    });
+
+    describe("unsupported networks", () => {
+        it("throws for testnet without a custom hashiObjectId", () => {
+            expect(() =>
+                new SuiGrpcClient({
+                    network: "testnet",
+                    baseUrl: "https://fullnode.testnet.sui.io:443",
+                }).$extend(hashi({ network: "testnet" })),
+            ).toThrow("not yet supported on Sui testnet");
+        });
+
+        it("throws for mainnet without a custom hashiObjectId", () => {
+            expect(() =>
+                new SuiGrpcClient({
+                    network: "mainnet",
+                    baseUrl: "https://fullnode.mainnet.sui.io:443",
+                }).$extend(hashi({ network: "mainnet" })),
+            ).toThrow("not yet supported on Sui mainnet");
+        });
+
+        it("allows unsupported networks with a custom hashiObjectId", () => {
+            expect(() =>
+                new SuiGrpcClient({
+                    network: "testnet",
+                    baseUrl: "https://fullnode.testnet.sui.io:443",
+                }).$extend(
+                    hashi({
+                        network: "testnet",
+                        hashiObjectId: HASHI_OBJECT_ID,
+                    }),
+                ),
+            ).not.toThrow();
+        });
     });
 
     describe("view", () => {
