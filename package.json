@@ -22,5 +22,10 @@
         "@mysten/sui": "^2.14.1",
         "prettier": "^3.8.1",
         "vitest": "^4.1.3"
+    },
+    "dependencies": {
+        "@noble/curves": "^2.0.1",
+        "@noble/hashes": "^2.0.1",
+        "@scure/base": "^2.0.0"
     }
 }

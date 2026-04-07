@@ -7,6 +7,16 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@noble/curves':
+        specifier: ^2.0.1
+        version: 2.0.1
+      '@noble/hashes':
+        specifier: ^2.0.1
+        version: 2.0.1
+      '@scure/base':
+        specifier: ^2.0.0
+        version: 2.0.0
     devDependencies:
       '@mysten/codegen':
         specifier: ^0.8.3
