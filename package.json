@@ -20,6 +20,7 @@
     "devDependencies": {
         "@mysten/codegen": "^0.8.3",
         "@mysten/sui": "^2.14.1",
-        "prettier": "^3.8.1"
+        "prettier": "^3.8.1",
+        "vitest": "^4.1.3"
     }
 }
