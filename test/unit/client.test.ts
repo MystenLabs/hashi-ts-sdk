@@ -6,16 +6,14 @@ import { SuiGrpcClient } from "@mysten/sui/grpc";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { fromHex } from "@mysten/sui/utils";
 
-const HASHI_OBJECT_ID =
-    "0x0000000000000000000000000000000000000000000000000000000000000001";
+const HASHI_OBJECT_ID = "0x0000000000000000000000000000000000000000000000000000000000000001";
 
 /** Deterministic test key: secret = 2 (matches TEST_HASHI_BTC_SK in Rust tests). */
 const TEST_SECRET = new Uint8Array(32);
 TEST_SECRET[31] = 2;
 const TEST_MPC_KEY = secp256k1.getPublicKey(TEST_SECRET, true); // 33 bytes
 
-const TEST_SUI_ADDRESS =
-    "0xabcdef0000000000000000000000000000000000000000000000000000000001";
+const TEST_SUI_ADDRESS = "0xabcdef0000000000000000000000000000000000000000000000000000000001";
 
 describe("HashiClient", () => {
     let client: SuiGrpcClient & { hashi: HashiClient };
@@ -40,7 +38,11 @@ describe("HashiClient", () => {
                         pending_epoch_change: null,
                         mpc_public_key: Array.from(TEST_MPC_KEY),
                     },
-                    config: { config: { contents: [] }, enabled_versions: { contents: [] }, upgrade_cap: null },
+                    config: {
+                        config: { contents: [] },
+                        enabled_versions: { contents: [] },
+                        upgrade_cap: null,
+                    },
                     treasury: { objects: HASHI_OBJECT_ID },
                     proposals: HASHI_OBJECT_ID,
                     tob: HASHI_OBJECT_ID,
@@ -73,7 +75,11 @@ describe("HashiClient", () => {
                         pending_epoch_change: null,
                         mpc_public_key: [], // empty — DKG not done
                     },
-                    config: { config: { contents: [] }, enabled_versions: { contents: [] }, upgrade_cap: null },
+                    config: {
+                        config: { contents: [] },
+                        enabled_versions: { contents: [] },
+                        upgrade_cap: null,
+                    },
                     treasury: { objects: HASHI_OBJECT_ID },
                     proposals: HASHI_OBJECT_ID,
                     tob: HASHI_OBJECT_ID,
@@ -99,7 +105,11 @@ describe("HashiClient", () => {
                         pending_epoch_change: null,
                         mpc_public_key: Array.from(TEST_MPC_KEY),
                     },
-                    config: { config: { contents: [] }, enabled_versions: { contents: [] }, upgrade_cap: null },
+                    config: {
+                        config: { contents: [] },
+                        enabled_versions: { contents: [] },
+                        upgrade_cap: null,
+                    },
                     treasury: { objects: HASHI_OBJECT_ID },
                     proposals: HASHI_OBJECT_ID,
                     tob: HASHI_OBJECT_ID,

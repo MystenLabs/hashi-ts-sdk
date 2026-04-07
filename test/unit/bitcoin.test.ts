@@ -42,15 +42,11 @@ describe("deriveChildPubkey", () => {
     });
 
     it("throws for wrong key length", () => {
-        expect(() => deriveChildPubkey(new Uint8Array(32), ZERO_ADDRESS)).toThrow(
-            "33-byte",
-        );
+        expect(() => deriveChildPubkey(new Uint8Array(32), ZERO_ADDRESS)).toThrow("33-byte");
     });
 
     it("throws for wrong address length", () => {
-        expect(() =>
-            deriveChildPubkey(TEST_COMPRESSED_KEY, new Uint8Array(20)),
-        ).toThrow("32-byte");
+        expect(() => deriveChildPubkey(TEST_COMPRESSED_KEY, new Uint8Array(20))).toThrow("32-byte");
     });
 });
 
@@ -87,11 +83,7 @@ describe("generateDepositAddress", () => {
         const addr = new Uint8Array(32);
         addr[31] = 0x42;
 
-        const btcAddress = generateDepositAddress(
-            TEST_COMPRESSED_KEY,
-            addr,
-            "regtest",
-        );
+        const btcAddress = generateDepositAddress(TEST_COMPRESSED_KEY, addr, "regtest");
 
         expect(btcAddress).toMatch(/^bcrt1p/);
         // P2TR bech32m addresses are 62 chars for mainnet, longer for regtest
@@ -102,11 +94,7 @@ describe("generateDepositAddress", () => {
         const suiAddr = new Uint8Array(32);
         suiAddr[0] = 0xab;
 
-        const composed = generateDepositAddress(
-            TEST_COMPRESSED_KEY,
-            suiAddr,
-            "testnet",
-        );
+        const composed = generateDepositAddress(TEST_COMPRESSED_KEY, suiAddr, "testnet");
 
         const child = deriveChildPubkey(TEST_COMPRESSED_KEY, suiAddr);
         const manual = taprootScriptPathAddress(child, "testnet");

@@ -42,9 +42,7 @@ const NUMS_KEY = new Uint8Array([
 const Point = secp256k1.Point;
 const CURVE_ORDER = Point.CURVE().n;
 
-const NUMS_POINT = Point.fromBytes(
-    concatBytes(new Uint8Array([0x02]), NUMS_KEY),
-);
+const NUMS_POINT = Point.fromBytes(concatBytes(new Uint8Array([0x02]), NUMS_KEY));
 
 // ---------------------------------------------------------------------------
 //  Internal helpers
@@ -89,14 +87,10 @@ export function deriveChildPubkey(
     suiAddress: Uint8Array,
 ): Uint8Array {
     if (mpcKeyCompressed.length !== 33) {
-        throw new Error(
-            `Expected 33-byte compressed MPC key, got ${mpcKeyCompressed.length}`,
-        );
+        throw new Error(`Expected 33-byte compressed MPC key, got ${mpcKeyCompressed.length}`);
     }
     if (suiAddress.length !== 32) {
-        throw new Error(
-            `Expected 32-byte Sui address, got ${suiAddress.length}`,
-        );
+        throw new Error(`Expected 32-byte Sui address, got ${suiAddress.length}`);
     }
 
     // Parse the compressed key, preserving y-parity from the prefix byte.
@@ -130,10 +124,7 @@ export function deriveChildPubkey(
  * @param network - Bitcoin network for the bech32m human-readable prefix
  * @returns bech32m-encoded P2TR address (e.g. `bc1p…`, `tb1p…`, `bcrt1p…`)
  */
-export function taprootScriptPathAddress(
-    pubkey: Uint8Array,
-    network: BitcoinNetwork,
-): string {
+export function taprootScriptPathAddress(pubkey: Uint8Array, network: BitcoinNetwork): string {
     if (pubkey.length !== 32) {
         throw new Error(`Expected 32-byte x-only pubkey, got ${pubkey.length}`);
     }

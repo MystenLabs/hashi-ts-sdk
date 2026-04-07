@@ -80,9 +80,7 @@ export class HashiClient {
             objectId: this.#hashiObjectId,
         });
 
-        const mpcKey = new Uint8Array(
-            result.json.committee_set.mpc_public_key,
-        );
+        const mpcKey = new Uint8Array(result.json.committee_set.mpc_public_key);
 
         if (mpcKey.length === 0) {
             throw new Error(
