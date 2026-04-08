@@ -100,7 +100,7 @@ describe("HashiClient", () => {
             ).rejects.toThrow("MPC public key not available");
         });
 
-        it.skip("derives a BTC deposit address from a live devnet MPC key", async () => {
+        it.todo("derives a BTC deposit address from a live devnet MPC key", async () => {
             const devnetClient = new SuiGrpcClient({
                 network: "devnet",
                 baseUrl: "https://fullnode.devnet.sui.io:443",
