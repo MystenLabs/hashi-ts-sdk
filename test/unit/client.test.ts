@@ -100,6 +100,30 @@ describe("HashiClient", () => {
             ).rejects.toThrow("MPC public key not available");
         });
 
+        it.skip("derives a BTC deposit address from a live devnet MPC key", async () => {
+            const devnetClient = new SuiGrpcClient({
+                network: "devnet",
+                baseUrl: "https://fullnode.devnet.sui.io:443",
+            }).$extend(hashi({ network: "devnet" }));
+
+            const suiAddress = "0xe40c8cf8b53822829b3a6dc9aea84b62653f60b771e9da4bd4e214cae851b87b";
+
+            const btcAddress = await devnetClient.hashi.generateDepositAddress({
+                suiAddress,
+            });
+
+            console.log("BTC deposit address:", btcAddress);
+            console.log("Sui address:", suiAddress);
+
+            // signet/testnet addresses start with tb1p
+            expect(btcAddress).toMatch(/^tb1p/);
+            expect(btcAddress.length).toBeGreaterThan(40);
+            // Should match the address shown in the frontend: https://devnet.hashi.sui.io/deposit
+            expect(btcAddress).toEqual(
+                "tb1paf8w48vlsy0k9pyrt6rrjcj2nxnm00cemf0enn84qu3936qxaa7qzd8ex2",
+            );
+        });
+
         it("allows overriding the network per call", async () => {
             vi.spyOn(Hashi, "get").mockResolvedValue({
                 json: {
