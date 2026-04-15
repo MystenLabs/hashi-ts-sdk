@@ -11,8 +11,8 @@ import { bcs } from "@mysten/sui/bcs";
 import { type Transaction } from "@mysten/sui/transactions";
 import * as object_bag from "./deps/sui/object_bag.js";
 import * as object_bag_1 from "./deps/sui/object_bag.js";
-import * as bag from "./deps/sui/bag.js";
-import * as table from "./deps/sui/table.js";
+import * as object_bag_2 from "./deps/sui/object_bag.js";
+import * as object_bag_3 from "./deps/sui/object_bag.js";
 import * as balance from "./deps/sui/balance.js";
 import * as utxo from "./utxo.js";
 import * as utxo_1 from "./utxo.js";
@@ -21,6 +21,10 @@ const $moduleName = "@local-pkg/hashi::withdrawal_queue";
 export const WithdrawalRequestQueue = new MoveStruct({
     name: `${$moduleName}::WithdrawalRequestQueue`,
     fields: {
+        /**
+         * Active requests awaiting action (Requested, Approved). ObjectBag so
+         * WithdrawalRequest UIDs are directly accessible via getObject.
+         */
         requests: object_bag.ObjectBag,
         /**
          * Processed requests — BTC consumed, lifecycle continuing or complete (Processing,
@@ -28,16 +32,12 @@ export const WithdrawalRequestQueue = new MoveStruct({
          */
         processed: object_bag_1.ObjectBag,
         /**
-         * In-flight withdrawal transactions (PendingWithdrawal) TODO: consider persisting
-         * PendingWithdrawal data for historical record
+         * In-flight withdrawal transactions (unsigned, signed but unconfirmed). ObjectBag
+         * so WithdrawalTransaction UIDs are directly accessible via getObject.
          */
-        pending_withdrawals: bag.Bag,
-        /**
-         * Per-sender index: sender address -> Bag of request IDs. Allows clients to
-         * discover all withdrawal requests for a given address. TODO: consider unifying
-         * this with the user_requests index in the deposit_queue
-         */
-        user_requests: table.Table,
+        withdrawal_txns: object_bag_2.ObjectBag,
+        /** Confirmed withdrawal transactions (historical record). */
+        confirmed_txns: object_bag_3.ObjectBag,
     },
 });
 export const OutputUtxo = new MoveStruct({
@@ -52,24 +52,9 @@ export const WithdrawalStatus = new MoveEnum({
     fields: {
         Requested: null,
         Approved: null,
-        Processing: new MoveStruct({
-            name: `WithdrawalStatus.Processing`,
-            fields: {
-                pending_withdrawal_id: bcs.Address,
-            },
-        }),
-        Signed: new MoveStruct({
-            name: `WithdrawalStatus.Signed`,
-            fields: {
-                pending_withdrawal_id: bcs.Address,
-            },
-        }),
-        Confirmed: new MoveStruct({
-            name: `WithdrawalStatus.Confirmed`,
-            fields: {
-                txid: bcs.Address,
-            },
-        }),
+        Processing: null,
+        Signed: null,
+        Confirmed: null,
     },
 });
 export const WithdrawalRequest = new MoveStruct({
@@ -81,13 +66,13 @@ export const WithdrawalRequest = new MoveStruct({
         bitcoin_address: bcs.vector(bcs.u8()),
         timestamp_ms: bcs.u64(),
         status: WithdrawalStatus,
-        pending_withdrawal_id: bcs.option(bcs.Address),
+        withdrawal_txn_id: bcs.option(bcs.Address),
         sui_tx_digest: bcs.vector(bcs.u8()),
         btc: balance.Balance,
     },
 });
-export const PendingWithdrawal = new MoveStruct({
-    name: `${$moduleName}::PendingWithdrawal`,
+export const WithdrawalTransaction = new MoveStruct({
+    name: `${$moduleName}::WithdrawalTransaction`,
     fields: {
         id: bcs.Address,
         txid: bcs.Address,
@@ -138,7 +123,7 @@ export const WithdrawalApprovedEvent = new MoveStruct({
 export const WithdrawalPickedForProcessingEvent = new MoveStruct({
     name: `${$moduleName}::WithdrawalPickedForProcessingEvent`,
     fields: {
-        pending_id: bcs.Address,
+        withdrawal_txn_id: bcs.Address,
         txid: bcs.Address,
         request_ids: bcs.vector(bcs.Address),
         inputs: bcs.vector(utxo_1.Utxo),
@@ -151,7 +136,7 @@ export const WithdrawalPickedForProcessingEvent = new MoveStruct({
 export const WithdrawalSignedEvent = new MoveStruct({
     name: `${$moduleName}::WithdrawalSignedEvent`,
     fields: {
-        withdrawal_id: bcs.Address,
+        withdrawal_txn_id: bcs.Address,
         request_ids: bcs.vector(bcs.Address),
         signatures: bcs.vector(bcs.vector(bcs.u8())),
     },
@@ -159,7 +144,7 @@ export const WithdrawalSignedEvent = new MoveStruct({
 export const WithdrawalConfirmedEvent = new MoveStruct({
     name: `${$moduleName}::WithdrawalConfirmedEvent`,
     fields: {
-        pending_id: bcs.Address,
+        withdrawal_txn_id: bcs.Address,
         txid: bcs.Address,
         change_utxo_id: bcs.option(utxo_2.UtxoId),
         request_ids: bcs.vector(bcs.Address),

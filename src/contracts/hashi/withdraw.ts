@@ -57,13 +57,11 @@ export interface RequestWithdrawalOptions {
 /**
  * Request a withdrawal of BTC from the bridge.
  *
- * The protocol fee (`withdrawal_fee_btc`) is deducted upfront from the provided
- * BTC coin and sent to Hashi's address balance. The remaining amount (net of fee)
- * is stored in the withdrawal request and determines the user's Bitcoin output at
- * commitment time.
+ * The full BTC amount is stored in the withdrawal request. The miner fee is
+ * deducted later at commitment time.
  *
- * The user must provide at least `withdrawal_minimum()` sats, which guarantees the
- * net amount covers worst-case miner fees plus dust.
+ * The user must provide at least `bitcoin_withdrawal_minimum()` sats, which
+ * guarantees the amount covers worst-case miner fees plus dust.
  */
 export function requestWithdrawal(options: RequestWithdrawalOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
@@ -149,19 +147,17 @@ export function commitWithdrawalTx(options: CommitWithdrawalTxOptions) {
             arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         });
 }
-export interface AllocatePresigsForPendingWithdrawalArguments {
+export interface AllocatePresigsForWithdrawalTxnArguments {
     hashi: RawTransactionArgument<string>;
     withdrawalId: RawTransactionArgument<string>;
 }
-export interface AllocatePresigsForPendingWithdrawalOptions {
+export interface AllocatePresigsForWithdrawalTxnOptions {
     package?: string;
     arguments:
-        | AllocatePresigsForPendingWithdrawalArguments
+        | AllocatePresigsForWithdrawalTxnArguments
         | [hashi: RawTransactionArgument<string>, withdrawalId: RawTransactionArgument<string>];
 }
-export function allocatePresigsForPendingWithdrawal(
-    options: AllocatePresigsForPendingWithdrawalOptions,
-) {
+export function allocatePresigsForWithdrawalTxn(options: AllocatePresigsForWithdrawalTxnOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
     const argumentsTypes = [null, "address"] satisfies (string | null)[];
     const parameterNames = ["hashi", "withdrawalId"];
@@ -169,7 +165,7 @@ export function allocatePresigsForPendingWithdrawal(
         tx.moveCall({
             package: packageAddress,
             module: "withdraw",
-            function: "allocate_presigs_for_pending_withdrawal",
+            function: "allocate_presigs_for_withdrawal_txn",
             arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         });
 }
@@ -250,9 +246,10 @@ export interface CancelWithdrawalOptions {
 /**
  * Cancel a pending withdrawal request and return the stored BTC to the requester.
  *
- * NOTE: The protocol fee (`withdrawal_fee_btc`) was deducted at request time and
- * is non-refundable. The returned amount is the net BTC stored in the request
- * (original amount minus protocol fee).
+ * Cancellation is allowed while the request is in the `Requested` or `Approved`
+ * state (i.e. still in the active requests bag). Once the committee commits the
+ * request to a `WithdrawalTransaction` it moves to `Processing` in the processed
+ * bag and its BTC is burned — cancellation is no longer possible.
  */
 export function cancelWithdrawal(options: CancelWithdrawalOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";

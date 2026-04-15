@@ -45,22 +45,17 @@ export const ExpiredDepositDeletedEvent = new MoveStruct({
 export interface DepositArguments {
     hashi: RawTransactionArgument<string>;
     utxo: RawTransactionArgument<string>;
-    fee: RawTransactionArgument<string>;
 }
 export interface DepositOptions {
     package?: string;
     arguments:
         | DepositArguments
-        | [
-              hashi: RawTransactionArgument<string>,
-              utxo: RawTransactionArgument<string>,
-              fee: RawTransactionArgument<string>,
-          ];
+        | [hashi: RawTransactionArgument<string>, utxo: RawTransactionArgument<string>];
 }
 export function deposit(options: DepositOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, null, null, "0x2::clock::Clock"] satisfies (string | null)[];
-    const parameterNames = ["hashi", "utxo", "fee"];
+    const argumentsTypes = [null, null, "0x2::clock::Clock"] satisfies (string | null)[];
+    const parameterNames = ["hashi", "utxo"];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,
