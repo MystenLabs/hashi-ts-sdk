@@ -1,23 +1,32 @@
 /**************************************************************
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
+
+
+/**
+ * Emergency pause/unpause governance module.
+ * 
+ * A single proposal type that can either pause or unpause the bridge. Pausing
+ * requires 51% quorum; unpausing requires ~67% quorum.
+ */
+
 import { MoveStruct, normalizeMoveArguments, type RawTransactionArgument } from '../utils/index.js';
 import { bcs } from '@mysten/sui/bcs';
 import { type Transaction } from '@mysten/sui/transactions';
-const $moduleName = '@local-pkg/hashi::disable_version';
-export const DisableVersion = new MoveStruct({ name: `${$moduleName}::DisableVersion`, fields: {
-        version: bcs.u64()
+const $moduleName = '@local-pkg/hashi::emergency_pause';
+export const EmergencyPause = new MoveStruct({ name: `${$moduleName}::EmergencyPause`, fields: {
+        pause: bcs.bool()
     } });
 export interface ProposeArguments {
     hashi: RawTransactionArgument<string>;
-    version: RawTransactionArgument<number | bigint>;
+    pause: RawTransactionArgument<boolean>;
     metadata: RawTransactionArgument<string>;
 }
 export interface ProposeOptions {
     package?: string;
     arguments: ProposeArguments | [
         hashi: RawTransactionArgument<string>,
-        version: RawTransactionArgument<number | bigint>,
+        pause: RawTransactionArgument<boolean>,
         metadata: RawTransactionArgument<string>
     ];
 }
@@ -25,14 +34,14 @@ export function propose(options: ProposeOptions) {
     const packageAddress = options.package ?? '@local-pkg/hashi';
     const argumentsTypes = [
         null,
-        'u64',
+        'bool',
         null,
         '0x2::clock::Clock'
     ] satisfies (string | null)[];
-    const parameterNames = ["hashi", "version", "metadata"];
+    const parameterNames = ["hashi", "pause", "metadata"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'disable_version',
+        module: 'emergency_pause',
         function: 'propose',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -58,7 +67,7 @@ export function execute(options: ExecuteOptions) {
     const parameterNames = ["hashi", "proposalId"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'disable_version',
+        module: 'emergency_pause',
         function: 'execute',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });

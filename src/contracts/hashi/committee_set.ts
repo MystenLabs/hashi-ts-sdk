@@ -1,27 +1,22 @@
 /**************************************************************
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
-import { MoveStruct } from "../utils/index.js";
-import { bcs } from "@mysten/sui/bcs";
-import * as bag from "./deps/sui/bag.js";
-import * as bag_1 from "./deps/sui/bag.js";
-import * as group_ops from "./deps/sui/group_ops.js";
-const $moduleName = "@local-pkg/hashi::committee_set";
-export const CommitteeSet = new MoveStruct({
-    name: `${$moduleName}::CommitteeSet`,
-    fields: {
+import { MoveStruct } from '../utils/index.js';
+import { bcs } from '@mysten/sui/bcs';
+import * as bag from './deps/sui/bag.js';
+import * as bag_1 from './deps/sui/bag.js';
+import * as group_ops from './deps/sui/group_ops.js';
+const $moduleName = '@local-pkg/hashi::committee_set';
+export const CommitteeSet = new MoveStruct({ name: `${$moduleName}::CommitteeSet`, fields: {
         members: bag.Bag,
         /** The current epoch. */
         epoch: bcs.u64(),
         committees: bag_1.Bag,
         pending_epoch_change: bcs.option(bcs.u64()),
         /** The MPC committee's threshold public key. */
-        mpc_public_key: bcs.vector(bcs.u8()),
-    },
-});
-export const MemberInfo = new MoveStruct({
-    name: `${$moduleName}::MemberInfo`,
-    fields: {
+        mpc_public_key: bcs.vector(bcs.u8())
+    } });
+export const MemberInfo = new MoveStruct({ name: `${$moduleName}::MemberInfo`, fields: {
         /** Sui Validator Address of this node */
         validator_address: bcs.Address,
         /** Sui Address of an operations account */
@@ -58,6 +53,5 @@ export const MemberInfo = new MoveStruct({
          * This public key can be rotated but will only take effect at the beginning of the
          * next epoch.
          */
-        next_epoch_encryption_public_key: bcs.vector(bcs.u8()),
-    },
-});
+        next_epoch_encryption_public_key: bcs.vector(bcs.u8())
+    } });

@@ -2,6 +2,7 @@
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
 
+
 /**
  * Similar to `sui::bag`, an `ObjectBag` is a heterogeneous map-like collection.
  * But unlike `sui::bag`, the values bound to these dynamic fields _must_ be
@@ -10,15 +11,12 @@
  * from within Move.
  */
 
-import { MoveStruct } from "../../../utils/index.js";
-import { bcs } from "@mysten/sui/bcs";
-const $moduleName = "0x2::object_bag";
-export const ObjectBag = new MoveStruct({
-    name: `${$moduleName}::ObjectBag`,
-    fields: {
+import { MoveStruct } from '../../../utils/index.js';
+import { bcs } from '@mysten/sui/bcs';
+const $moduleName = '0x2::object_bag';
+export const ObjectBag = new MoveStruct({ name: `${$moduleName}::ObjectBag`, fields: {
         /** the ID of this bag */
         id: bcs.Address,
         /** the number of key-value pairs in the bag */
-        size: bcs.u64(),
-    },
-});
+        size: bcs.u64()
+    } });
