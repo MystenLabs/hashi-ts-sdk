@@ -1,6 +1,6 @@
 import type { ClientWithCoreApi } from "@mysten/sui/client";
 import { fromHex } from "@mysten/sui/utils";
-import type { Transaction } from "@mysten/sui/transactions";
+import { Transaction } from "@mysten/sui/transactions";
 import { Hashi } from "./contracts/hashi/hashi.js";
 import * as depositModule from "./contracts/hashi/deposit.js";
 import * as withdrawModule from "./contracts/hashi/withdraw.js";
@@ -136,13 +136,29 @@ export class HashiClient {
          * hot-potato returned by `withdraw::cancel_withdrawal` by wrapping it
          * into a `Coin<BTC>` and transferring to `recipient`.
          */
-        cancelWithdrawal: (_options: {
+        cancelWithdrawal: (options: {
             /** The withdrawal request ID to cancel. */
             requestId: string;
-            /** Recipient of the returned BTC coin. Defaults to the tx sender. */
-            recipient?: string;
+            /**
+             * Sui address that will receive the returned `Coin<BTC>`. Required
+             * because the unsigned `Transaction` does not know its sender at
+             * build time — the caller must pass their own address explicitly.
+             */
+            recipient: string;
         }): Transaction => {
-            throw new Error("TODO");
+            const tx = new Transaction();
+            const balance = tx.add(
+                this.call.cancelWithdrawal({ requestId: options.requestId }),
+            );
+            const [coin] = tx.moveCall({
+                package: "0x2",
+                module: "coin",
+                function: "from_balance",
+                typeArguments: [`${this.#packageId}::btc::BTC`],
+                arguments: [balance],
+            });
+            tx.transferObjects([coin], options.recipient);
+            return tx;
         },
     };
 
