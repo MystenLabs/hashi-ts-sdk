@@ -279,6 +279,30 @@ describe("HashiClient", () => {
     });
 
     describe("tx", () => {
+        describe("deposit", () => {
+            it("composes utxo_id + utxo + deposit", () => {
+                const tx = client.hashi.tx.deposit({
+                    txid: "0x" + "ab".repeat(32),
+                    vout: 0,
+                    amount: 100_000n,
+                    suiAddress: TEST_SUI_ADDRESS,
+                });
+                expect(tx).toBeInstanceOf(Transaction);
+
+                const { commands } = tx.getData();
+                expect(commands).toHaveLength(3);
+
+                expect(commands[0].$kind).toBe("MoveCall");
+                expect(commands[0].MoveCall?.function).toBe("utxo_id");
+
+                expect(commands[1].$kind).toBe("MoveCall");
+                expect(commands[1].MoveCall?.function).toBe("utxo");
+
+                expect(commands[2].$kind).toBe("MoveCall");
+                expect(commands[2].MoveCall?.function).toBe("deposit");
+            });
+        });
+
         describe("cancelWithdrawal", () => {
             it("composes cancel + from_balance + transferObjects", () => {
                 const tx = client.hashi.tx.cancelWithdrawal({

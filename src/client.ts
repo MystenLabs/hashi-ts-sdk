@@ -4,6 +4,7 @@ import { Transaction, coinWithBalance } from "@mysten/sui/transactions";
 import { Hashi } from "./contracts/hashi/hashi.js";
 import * as depositModule from "./contracts/hashi/deposit.js";
 import * as withdrawModule from "./contracts/hashi/withdraw.js";
+import * as utxoModule from "./contracts/hashi/utxo.js";
 import type { RawTransactionArgument } from "./contracts/utils/index.js";
 import { generateDepositAddress as generateDepositAddressRaw } from "./bitcoin.js";
 import { NETWORK_CONFIG } from "./constants.js";
@@ -93,7 +94,7 @@ export class HashiClient {
          * confirmation. Composes `utxo::utxo_id` → `utxo::utxo` → `deposit::deposit`
          * in a single PTB so the `Utxo` struct is constructed inline.
          */
-        deposit: (_options: {
+        deposit: (options: {
             /** 0x-prefixed 32-byte Bitcoin txid of the funding transaction. */
             txid: string;
             /** Output index (u32) within that Bitcoin transaction. */
@@ -108,7 +109,25 @@ export class HashiClient {
              */
             suiAddress: string;
         }): Transaction => {
-            throw new Error("TODO");
+            const tx = new Transaction();
+            const utxoId = tx.add(
+                utxoModule.utxoId({
+                    package: this.#packageId,
+                    arguments: { txid: options.txid, vout: options.vout },
+                }),
+            );
+            const utxo = tx.add(
+                utxoModule.utxo({
+                    package: this.#packageId,
+                    arguments: {
+                        utxoId,
+                        amount: options.amount,
+                        derivationPath: options.suiAddress,
+                    },
+                }),
+            );
+            tx.add(this.call.deposit({ utxo }));
+            return tx;
         },
 
         /**
