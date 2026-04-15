@@ -1,5 +1,6 @@
 import type { ClientWithCoreApi } from "@mysten/sui/client";
 import { fromHex } from "@mysten/sui/utils";
+import type { Transaction } from "@mysten/sui/transactions";
 import { Hashi } from "./contracts/hashi/hashi.js";
 import * as depositModule from "./contracts/hashi/deposit.js";
 import * as withdrawModule from "./contracts/hashi/withdraw.js";
@@ -83,7 +84,67 @@ export class HashiClient {
     async deposit() {}
     async withdraw() {}
 
-    tx = {};
+    // User-facing transaction builders — compose `call.*` thunks into a full
+    // PTB and return the unsigned `Transaction`. Execution (sign + dry-run +
+    // submit) is the direct-method layer's concern and happens elsewhere.
+    tx = {
+        /**
+         * Build a transaction that submits a Bitcoin deposit for committee
+         * confirmation. Composes `utxo::utxo_id` → `utxo::utxo` → `deposit::deposit`
+         * in a single PTB so the `Utxo` struct is constructed inline.
+         */
+        deposit: (_options: {
+            /** 0x-prefixed 32-byte Bitcoin txid of the funding transaction. */
+            txid: string;
+            /** Output index (u32) within that Bitcoin transaction. */
+            vout: number;
+            /** Amount in sats (u64). Must be ≥ the on-chain deposit minimum. */
+            amount: bigint;
+            /**
+             * Sui address that should receive the minted BTC — goes into the
+             * deposit's `derivation_path` as `Some(addr)`. Typically the same
+             * address used to derive the Bitcoin deposit address via
+             * `generateDepositAddress`.
+             */
+            suiAddress: string;
+        }): Transaction => {
+            throw new Error("TODO");
+        },
+
+        /**
+         * Build a transaction that submits a BTC withdrawal request. Sources the
+         * BTC via `coinWithBalance`, unwraps it into a `Balance<BTC>`, and passes
+         * it to `withdraw::request_withdrawal` along with the target Bitcoin
+         * output address.
+         */
+        requestWithdrawal: (_options: {
+            /** Amount in sats to withdraw. Must be ≥ the on-chain withdrawal minimum. */
+            amount: bigint;
+            /**
+             * Target Bitcoin address as raw witness program bytes — 20 bytes for
+             * P2WPKH, 32 bytes for P2TR. Callers decode their own bech32(m)
+             * strings for now; a string-input overload may land in a follow-up.
+             */
+            bitcoinAddress: Uint8Array;
+        }): Transaction => {
+            throw new Error("TODO");
+        },
+
+        /**
+         * Build a transaction that cancels a pending withdrawal request and
+         * returns the locked BTC to the user. Consumes the `Balance<BTC>`
+         * hot-potato returned by `withdraw::cancel_withdrawal` by wrapping it
+         * into a `Coin<BTC>` and transferring to `recipient`.
+         */
+        cancelWithdrawal: (_options: {
+            /** The withdrawal request ID to cancel. */
+            requestId: string;
+            /** Recipient of the returned BTC coin. Defaults to the tx sender. */
+            recipient?: string;
+        }): Transaction => {
+            throw new Error("TODO");
+        },
+    };
 
     // Move call helpers — thin wrappers over generated bindings that auto-inject
     // the Hashi shared object and the resolved package id. Each returns a thunk
