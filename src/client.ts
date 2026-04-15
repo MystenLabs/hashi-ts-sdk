@@ -1,6 +1,6 @@
 import type { ClientWithCoreApi } from "@mysten/sui/client";
 import { fromHex } from "@mysten/sui/utils";
-import { Transaction } from "@mysten/sui/transactions";
+import { Transaction, coinWithBalance } from "@mysten/sui/transactions";
 import { Hashi } from "./contracts/hashi/hashi.js";
 import * as depositModule from "./contracts/hashi/deposit.js";
 import * as withdrawModule from "./contracts/hashi/withdraw.js";
@@ -117,7 +117,7 @@ export class HashiClient {
          * it to `withdraw::request_withdrawal` along with the target Bitcoin
          * output address.
          */
-        requestWithdrawal: (_options: {
+        requestWithdrawal: (options: {
             /** Amount in sats to withdraw. Must be ≥ the on-chain withdrawal minimum. */
             amount: bigint;
             /**
@@ -127,7 +127,29 @@ export class HashiClient {
              */
             bitcoinAddress: Uint8Array;
         }): Transaction => {
-            throw new Error("TODO");
+            const tx = new Transaction();
+            const btcType = `${this.#packageId}::btc::BTC`;
+            const coin = tx.add(
+                coinWithBalance({
+                    type: btcType,
+                    balance: options.amount,
+                    useGasCoin: false,
+                }),
+            );
+            const [balance] = tx.moveCall({
+                package: "0x2",
+                module: "coin",
+                function: "into_balance",
+                typeArguments: [btcType],
+                arguments: [coin],
+            });
+            tx.add(
+                this.call.requestWithdrawal({
+                    btc: balance,
+                    bitcoinAddress: Array.from(options.bitcoinAddress),
+                }),
+            );
+            return tx;
         },
 
         /**

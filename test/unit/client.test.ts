@@ -302,5 +302,31 @@ describe("HashiClient", () => {
                 expect(commands[2].$kind).toBe("TransferObjects");
             });
         });
+
+        describe("requestWithdrawal", () => {
+            it("composes coinWithBalance + into_balance + request_withdrawal", () => {
+                const tx = client.hashi.tx.requestWithdrawal({
+                    amount: 50_000n,
+                    bitcoinAddress: new Uint8Array(32),
+                });
+                expect(tx).toBeInstanceOf(Transaction);
+
+                const { commands } = tx.getData();
+                const moveCalls = commands.filter((c) => c.$kind === "MoveCall");
+
+                const intoBalance = moveCalls.find(
+                    (c) => c.MoveCall?.function === "into_balance",
+                );
+                expect(intoBalance?.MoveCall?.typeArguments).toEqual([
+                    `${PACKAGE_ID}::btc::BTC`,
+                ]);
+
+                expect(
+                    moveCalls.some(
+                        (c) => c.MoveCall?.function === "request_withdrawal",
+                    ),
+                ).toBe(true);
+            });
+        });
     });
 });
