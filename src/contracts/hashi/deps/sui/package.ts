@@ -2,18 +2,19 @@
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
 
-
 /**
  * Functions for operating on Move packages from within Move:
- * 
+ *
  * - Creating proof-of-publish objects from one-time witnesses
  * - Administering package upgrades through upgrade policies.
  */
 
-import { MoveStruct } from '../../../utils/index.js';
-import { bcs } from '@mysten/sui/bcs';
-const $moduleName = '0x2::package';
-export const UpgradeCap = new MoveStruct({ name: `${$moduleName}::UpgradeCap`, fields: {
+import { MoveStruct } from "../../../utils/index.js";
+import { bcs } from "@mysten/sui/bcs";
+const $moduleName = "0x2::package";
+export const UpgradeCap = new MoveStruct({
+    name: `${$moduleName}::UpgradeCap`,
+    fields: {
         id: bcs.Address,
         /** (Mutable) ID of the package that can be upgraded. */
         package: bcs.Address,
@@ -23,5 +24,6 @@ export const UpgradeCap = new MoveStruct({ name: `${$moduleName}::UpgradeCap`, f
          */
         version: bcs.u64(),
         /** What kind of upgrades are allowed. */
-        policy: bcs.u8()
-    } });
+        policy: bcs.u8(),
+    },
+});
