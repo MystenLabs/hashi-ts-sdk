@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { HashiClient, hashi } from "../../src/client.js";
 import { Hashi } from "../../src/contracts/hashi/hashi.js";
-import { generateDepositAddress } from "../../src/bitcoin.js";
+import { generateDepositAddress, arkworksToSec1Compressed } from "../../src/bitcoin.js";
 import { SuiGrpcClient } from "@mysten/sui/grpc";
 import { Transaction } from "@mysten/sui/transactions";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
@@ -14,7 +14,26 @@ const REQUEST_ID = "0x0000000000000000000000000000000000000000000000000000000000
 /** Deterministic test key: secret = 2 (matches TEST_HASHI_BTC_SK in Rust tests). */
 const TEST_SECRET = new Uint8Array(32);
 TEST_SECRET[31] = 2;
-const TEST_MPC_KEY = secp256k1.getPublicKey(TEST_SECRET, true); // 33 bytes
+const TEST_MPC_KEY = secp256k1.getPublicKey(TEST_SECRET, true); // 33 bytes, SEC1 compressed
+
+/**
+ * Arkworks-encoded form of TEST_MPC_KEY, matching the on-chain storage format.
+ * Arkworks: bytes[0..32] = x in LE, byte[32] = flag (bit 7 = y > (p-1)/2).
+ */
+function sec1ToArkworks(sec1: Uint8Array): Uint8Array {
+    const xBe = sec1.slice(1);
+    const xLe = new Uint8Array(xBe).reverse();
+    const Point = secp256k1.Point;
+    const point = Point.fromBytes(sec1);
+    const y = point.toAffine().y;
+    const p = Point.CURVE().p;
+    const yIsNeg = y > (p - 1n) / 2n;
+    const ark = new Uint8Array(33);
+    ark.set(xLe, 0);
+    ark[32] = yIsNeg ? 0x80 : 0x00;
+    return ark;
+}
+const TEST_MPC_KEY_ARKWORKS = sec1ToArkworks(TEST_MPC_KEY);
 
 const TEST_SUI_ADDRESS = "0xabcdef0000000000000000000000000000000000000000000000000000000001";
 
@@ -46,7 +65,7 @@ describe("HashiClient", () => {
                         epoch: 0n,
                         committees: HASHI_OBJECT_ID,
                         pending_epoch_change: null,
-                        mpc_public_key: Array.from(TEST_MPC_KEY),
+                        mpc_public_key: Array.from(TEST_MPC_KEY_ARKWORKS),
                     },
                     config: {
                         config: { contents: [] },
@@ -137,7 +156,7 @@ describe("HashiClient", () => {
                         epoch: 0n,
                         committees: HASHI_OBJECT_ID,
                         pending_epoch_change: null,
-                        mpc_public_key: Array.from(TEST_MPC_KEY),
+                        mpc_public_key: Array.from(TEST_MPC_KEY_ARKWORKS),
                     },
                     config: {
                         config: { contents: [] },
@@ -218,7 +237,7 @@ describe("HashiClient", () => {
                             epoch: 0n,
                             committees: HASHI_OBJECT_ID,
                             pending_epoch_change: null,
-                            mpc_public_key: Array.from(TEST_MPC_KEY),
+                            mpc_public_key: Array.from(TEST_MPC_KEY_ARKWORKS),
                         },
                         config: {
                             config: { contents: [] },
@@ -319,9 +338,7 @@ describe("HashiClient", () => {
 
                 expect(commands[1].$kind).toBe("MoveCall");
                 expect(commands[1].MoveCall?.function).toBe("from_balance");
-                expect(commands[1].MoveCall?.typeArguments).toEqual([
-                    `${PACKAGE_ID}::btc::BTC`,
-                ]);
+                expect(commands[1].MoveCall?.typeArguments).toEqual([`${PACKAGE_ID}::btc::BTC`]);
 
                 expect(commands[2].$kind).toBe("TransferObjects");
             });
@@ -338,18 +355,12 @@ describe("HashiClient", () => {
                 const { commands } = tx.getData();
                 const moveCalls = commands.filter((c) => c.$kind === "MoveCall");
 
-                const intoBalance = moveCalls.find(
-                    (c) => c.MoveCall?.function === "into_balance",
-                );
-                expect(intoBalance?.MoveCall?.typeArguments).toEqual([
-                    `${PACKAGE_ID}::btc::BTC`,
-                ]);
+                const intoBalance = moveCalls.find((c) => c.MoveCall?.function === "into_balance");
+                expect(intoBalance?.MoveCall?.typeArguments).toEqual([`${PACKAGE_ID}::btc::BTC`]);
 
-                expect(
-                    moveCalls.some(
-                        (c) => c.MoveCall?.function === "request_withdrawal",
-                    ),
-                ).toBe(true);
+                expect(moveCalls.some((c) => c.MoveCall?.function === "request_withdrawal")).toBe(
+                    true,
+                );
             });
         });
     });

@@ -6,7 +6,10 @@ import * as depositModule from "./contracts/hashi/deposit.js";
 import * as withdrawModule from "./contracts/hashi/withdraw.js";
 import * as utxoModule from "./contracts/hashi/utxo.js";
 import type { RawTransactionArgument } from "./contracts/utils/index.js";
-import { generateDepositAddress as generateDepositAddressRaw } from "./bitcoin.js";
+import {
+    generateDepositAddress as generateDepositAddressRaw,
+    arkworksToSec1Compressed,
+} from "./bitcoin.js";
 import { NETWORK_CONFIG } from "./constants.js";
 import type { BitcoinNetwork, HashiClientOptions, SuiNetwork } from "./types.js";
 
@@ -188,9 +191,7 @@ export class HashiClient {
             recipient: string;
         }): Transaction => {
             const tx = new Transaction();
-            const balance = tx.add(
-                this.call.cancelWithdrawal({ requestId: options.requestId }),
-            );
+            const balance = tx.add(this.call.cancelWithdrawal({ requestId: options.requestId }));
             const [coin] = tx.moveCall({
                 package: "0x2",
                 module: "coin",
@@ -261,7 +262,7 @@ export class HashiClient {
                 );
             }
 
-            return mpcKey;
+            return arkworksToSec1Compressed(mpcKey);
         },
         // TODO: implement Governance-related view methods
         bitcoinDepositMinimum: async (): Promise<bigint> => {
