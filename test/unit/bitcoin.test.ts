@@ -147,6 +147,26 @@ describe("generateDepositAddress", () => {
         expect(composed).toBe(manual);
     });
 
+    /**
+     * Cross-language test vectors using the same constants as the Rust tests
+     * in `hashi-types/src/guardian/bitcoin_utils.rs`:
+     *   TEST_HASHI_BTC_SK = [2u8; 32]  (secret scalar = 2)
+     *
+     * These vectors should be added to the Rust test suite as well so that
+     * both implementations assert the same expected addresses.
+     */
+    it("matches cross-language vector: secret=2, zero address, regtest", () => {
+        const btcAddress = generateDepositAddress(TEST_COMPRESSED_KEY, ZERO_ADDRESS, "regtest");
+        expect(btcAddress).toBe("bcrt1phljz7xzha5m52dudgkrd3z3lly8287wyspgazmd8zktrvvz07n6q37kevt");
+    });
+
+    it("matches cross-language vector: secret=2, address=0x01, regtest", () => {
+        const addr = new Uint8Array(32);
+        addr[31] = 1;
+        const btcAddress = generateDepositAddress(TEST_COMPRESSED_KEY, addr, "regtest");
+        expect(btcAddress).toBe("bcrt1phgk8napk468tyq07t4m834gk80yhz0yrw7z8qcfqcc0pzfcm44jseq66p8");
+    });
+
     it("matches a known reference vector", () => {
         // 33-byte arkworks-compressed MPC master public key (from devnet CommitteeSet.mpc_public_key).
         const MPC_MASTER_KEY_HEX =
