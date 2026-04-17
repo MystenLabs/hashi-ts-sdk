@@ -27,6 +27,15 @@ TypeScript SDK for interacting with the Hashi Sui Move smart contracts.
 - `@noble/curves`, `@noble/hashes` — secp256k1 point math and SHA3-HKDF for key derivation
 - `@scure/base` — bech32m encoding for taproot addresses
 
+## Networks
+
+Currently only Sui **devnet** is wired up (`src/constants.ts`); BTC defaults to **signet**. Devnet support is **temporary** and will be deprecated in favor of:
+
+- **testnet** — for end-to-end testing of SDK consumers (and our own real-network tests).
+- **mainnet** — for production DeFi consumers using the SDK against live BTC.
+
+Update `NETWORK_CONFIG` in `src/constants.ts` when those network deployments land.
+
 ## Bitcoin Address Scheme
 
 Each Sui address maps to a unique P2TR (Pay-to-Taproot) Bitcoin deposit address. The derivation replicates `fastcrypto_tbls::threshold_schnorr::key_derivation::derive_verifying_key`:
