@@ -1,8 +1,10 @@
 import type { ClientWithCoreApi } from "@mysten/sui/client";
 import { fromHex } from "@mysten/sui/utils";
+import { Transaction, coinWithBalance } from "@mysten/sui/transactions";
 import { Hashi } from "./contracts/hashi/hashi.js";
 import * as depositModule from "./contracts/hashi/deposit.js";
 import * as withdrawModule from "./contracts/hashi/withdraw.js";
+import * as utxoModule from "./contracts/hashi/utxo.js";
 import type { RawTransactionArgument } from "./contracts/utils/index.js";
 import { generateDepositAddress as generateDepositAddressRaw } from "./bitcoin.js";
 import { NETWORK_CONFIG } from "./constants.js";
@@ -83,7 +85,121 @@ export class HashiClient {
     async deposit() {}
     async withdraw() {}
 
-    tx = {};
+    // User-facing transaction builders — compose `call.*` thunks into a full
+    // PTB and return the unsigned `Transaction`. Execution (sign + dry-run +
+    // submit) is the direct-method layer's concern and happens elsewhere.
+    tx = {
+        /**
+         * Build a transaction that submits a Bitcoin deposit for committee
+         * confirmation. Composes `utxo::utxo_id` → `utxo::utxo` → `deposit::deposit`
+         * in a single PTB so the `Utxo` struct is constructed inline.
+         */
+        deposit: (options: {
+            /** 0x-prefixed 32-byte Bitcoin txid of the funding transaction. */
+            txid: string;
+            /** Output index (u32) within that Bitcoin transaction. */
+            vout: number;
+            /** Amount in sats (u64). Must be ≥ the on-chain deposit minimum. */
+            amount: bigint;
+            /**
+             * Sui address that should receive the minted BTC — goes into the
+             * deposit's `derivation_path` as `Some(addr)`. Typically the same
+             * address used to derive the Bitcoin deposit address via
+             * `generateDepositAddress`.
+             */
+            suiAddress: string;
+        }): Transaction => {
+            const tx = new Transaction();
+            const utxoId = tx.add(
+                utxoModule.utxoId({
+                    package: this.#packageId,
+                    arguments: { txid: options.txid, vout: options.vout },
+                }),
+            );
+            const utxo = tx.add(
+                utxoModule.utxo({
+                    package: this.#packageId,
+                    arguments: {
+                        utxoId,
+                        amount: options.amount,
+                        derivationPath: options.suiAddress,
+                    },
+                }),
+            );
+            tx.add(this.call.deposit({ utxo }));
+            return tx;
+        },
+
+        /**
+         * Build a transaction that submits a BTC withdrawal request. Sources the
+         * BTC via `coinWithBalance`, unwraps it into a `Balance<BTC>`, and passes
+         * it to `withdraw::request_withdrawal` along with the target Bitcoin
+         * output address.
+         */
+        requestWithdrawal: (options: {
+            /** Amount in sats to withdraw. Must be ≥ the on-chain withdrawal minimum. */
+            amount: bigint;
+            /**
+             * Target Bitcoin address as raw witness program bytes — 20 bytes for
+             * P2WPKH, 32 bytes for P2TR. Callers decode their own bech32(m)
+             * strings for now; a string-input overload may land in a follow-up.
+             */
+            bitcoinAddress: Uint8Array;
+        }): Transaction => {
+            const tx = new Transaction();
+            const btcType = `${this.#packageId}::btc::BTC`;
+            const coin = tx.add(
+                coinWithBalance({
+                    type: btcType,
+                    balance: options.amount,
+                    useGasCoin: false,
+                }),
+            );
+            const [balance] = tx.moveCall({
+                package: "0x2",
+                module: "coin",
+                function: "into_balance",
+                typeArguments: [btcType],
+                arguments: [coin],
+            });
+            tx.add(
+                this.call.requestWithdrawal({
+                    btc: balance,
+                    bitcoinAddress: Array.from(options.bitcoinAddress),
+                }),
+            );
+            return tx;
+        },
+
+        /**
+         * Build a transaction that cancels a pending withdrawal request and
+         * returns the locked BTC to the user. Consumes the `Balance<BTC>`
+         * hot-potato returned by `withdraw::cancel_withdrawal` by wrapping it
+         * into a `Coin<BTC>` and transferring to `recipient`.
+         */
+        cancelWithdrawal: (options: {
+            /** The withdrawal request ID to cancel. */
+            requestId: string;
+            /**
+             * Sui address that will receive the returned `Coin<BTC>`. Required
+             * because the unsigned `Transaction` does not know its sender at
+             * build time — the caller must pass their own address explicitly.
+             */
+            recipient: string;
+        }): Transaction => {
+            const tx = new Transaction();
+            const balance = tx.add(this.call.cancelWithdrawal({ requestId: options.requestId }));
+            const [coin] = tx.moveCall({
+                package: "0x2",
+                module: "coin",
+                function: "from_balance",
+                typeArguments: [`${this.#packageId}::btc::BTC`],
+                arguments: [balance],
+            });
+            tx.transferObjects([coin], options.recipient);
+            return tx;
+        },
+    };
 
     // Move call helpers — thin wrappers over generated bindings that auto-inject
     // the Hashi shared object and the resolved package id. Each returns a thunk

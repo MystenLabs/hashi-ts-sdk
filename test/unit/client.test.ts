@@ -3,11 +3,13 @@ import { HashiClient, hashi } from "../../src/client.js";
 import { Hashi } from "../../src/contracts/hashi/hashi.js";
 import { generateDepositAddress } from "../../src/bitcoin.js";
 import { SuiGrpcClient } from "@mysten/sui/grpc";
+import { Transaction } from "@mysten/sui/transactions";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { fromHex } from "@mysten/sui/utils";
 
 const HASHI_OBJECT_ID = "0x0000000000000000000000000000000000000000000000000000000000000001";
 const PACKAGE_ID = "0x0000000000000000000000000000000000000000000000000000000000000002";
+const REQUEST_ID = "0x0000000000000000000000000000000000000000000000000000000000000003";
 
 /** Deterministic test key: secret = 2 (matches TEST_HASHI_BTC_SK in Rust tests). */
 const TEST_SECRET = new Uint8Array(32);
@@ -27,6 +29,7 @@ describe("HashiClient", () => {
             hashi({
                 network: "devnet",
                 hashiObjectId: HASHI_OBJECT_ID,
+                packageId: PACKAGE_ID,
                 bitcoinNetwork: "regtest",
             }),
         );
@@ -273,5 +276,73 @@ describe("HashiClient", () => {
         it.todo("bitcoinChainId");
         it.todo("depositMinimum");
         it.todo("worstCaseNetworkFee");
+    });
+
+    describe("tx", () => {
+        describe("deposit", () => {
+            it("composes utxo_id + utxo + deposit", () => {
+                const tx = client.hashi.tx.deposit({
+                    txid: "0x" + "ab".repeat(32),
+                    vout: 0,
+                    amount: 100_000n,
+                    suiAddress: TEST_SUI_ADDRESS,
+                });
+                expect(tx).toBeInstanceOf(Transaction);
+
+                const { commands } = tx.getData();
+                expect(commands).toHaveLength(3);
+
+                expect(commands[0].$kind).toBe("MoveCall");
+                expect(commands[0].MoveCall?.function).toBe("utxo_id");
+
+                expect(commands[1].$kind).toBe("MoveCall");
+                expect(commands[1].MoveCall?.function).toBe("utxo");
+
+                expect(commands[2].$kind).toBe("MoveCall");
+                expect(commands[2].MoveCall?.function).toBe("deposit");
+            });
+        });
+
+        describe("cancelWithdrawal", () => {
+            it("composes cancel + from_balance + transferObjects", () => {
+                const tx = client.hashi.tx.cancelWithdrawal({
+                    requestId: REQUEST_ID,
+                    recipient: TEST_SUI_ADDRESS,
+                });
+                expect(tx).toBeInstanceOf(Transaction);
+
+                const { commands } = tx.getData();
+                expect(commands).toHaveLength(3);
+
+                expect(commands[0].$kind).toBe("MoveCall");
+                expect(commands[0].MoveCall?.function).toBe("cancel_withdrawal");
+
+                expect(commands[1].$kind).toBe("MoveCall");
+                expect(commands[1].MoveCall?.function).toBe("from_balance");
+                expect(commands[1].MoveCall?.typeArguments).toEqual([`${PACKAGE_ID}::btc::BTC`]);
+
+                expect(commands[2].$kind).toBe("TransferObjects");
+            });
+        });
+
+        describe("requestWithdrawal", () => {
+            it("composes coinWithBalance + into_balance + request_withdrawal", () => {
+                const tx = client.hashi.tx.requestWithdrawal({
+                    amount: 50_000n,
+                    bitcoinAddress: new Uint8Array(32),
+                });
+                expect(tx).toBeInstanceOf(Transaction);
+
+                const { commands } = tx.getData();
+                const moveCalls = commands.filter((c) => c.$kind === "MoveCall");
+
+                const intoBalance = moveCalls.find((c) => c.MoveCall?.function === "into_balance");
+                expect(intoBalance?.MoveCall?.typeArguments).toEqual([`${PACKAGE_ID}::btc::BTC`]);
+
+                expect(moveCalls.some((c) => c.MoveCall?.function === "request_withdrawal")).toBe(
+                    true,
+                );
+            });
+        });
     });
 });
