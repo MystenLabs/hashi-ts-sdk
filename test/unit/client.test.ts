@@ -7,6 +7,7 @@ import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { fromHex } from "@mysten/sui/utils";
 
 const HASHI_OBJECT_ID = "0x0000000000000000000000000000000000000000000000000000000000000001";
+const PACKAGE_ID = "0x0000000000000000000000000000000000000000000000000000000000000002";
 
 /** Deterministic test key: secret = 2 (matches TEST_HASHI_BTC_SK in Rust tests). */
 const TEST_SECRET = new Uint8Array(32);
@@ -187,7 +188,7 @@ describe("HashiClient", () => {
             ).toThrow("not yet supported on Sui mainnet");
         });
 
-        it("allows unsupported networks with a custom hashiObjectId", () => {
+        it("allows unsupported networks with a custom hashiObjectId and packageId", () => {
             expect(() =>
                 new SuiGrpcClient({
                     network: "testnet",
@@ -196,6 +197,7 @@ describe("HashiClient", () => {
                     hashi({
                         network: "testnet",
                         hashiObjectId: HASHI_OBJECT_ID,
+                        packageId: PACKAGE_ID,
                     }),
                 ),
             ).not.toThrow();

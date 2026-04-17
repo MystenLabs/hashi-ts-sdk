@@ -1,6 +1,9 @@
 import type { ClientWithCoreApi } from "@mysten/sui/client";
 import { fromHex } from "@mysten/sui/utils";
 import { Hashi } from "./contracts/hashi/hashi.js";
+import * as depositModule from "./contracts/hashi/deposit.js";
+import * as withdrawModule from "./contracts/hashi/withdraw.js";
+import type { RawTransactionArgument } from "./contracts/utils/index.js";
 import { generateDepositAddress as generateDepositAddressRaw } from "./bitcoin.js";
 import { NETWORK_CONFIG } from "./constants.js";
 import type { BitcoinNetwork, HashiClientOptions, SuiNetwork } from "./types.js";
@@ -20,28 +23,33 @@ export function hashi<const Name = "hashi">({
 export class HashiClient {
     #client: ClientWithCoreApi;
     #hashiObjectId: string;
+    #packageId: string;
     #bitcoinNetwork: BitcoinNetwork;
 
     constructor({
         client,
         network,
         hashiObjectId,
+        packageId,
         bitcoinNetwork,
     }: {
         client: ClientWithCoreApi;
         network: SuiNetwork;
         hashiObjectId?: string;
+        packageId?: string;
         bitcoinNetwork?: BitcoinNetwork;
     }) {
         const config = NETWORK_CONFIG[network];
         const resolvedObjectId = hashiObjectId ?? config?.hashiObjectId;
-        if (!resolvedObjectId) {
+        const resolvedPackageId = packageId ?? config?.packageId;
+        if (!resolvedObjectId || !resolvedPackageId) {
             throw new Error(
-                `Hashi is not yet supported on Sui ${network}. Provide a custom hashiObjectId.`,
+                `Hashi is not yet supported on Sui ${network}. Provide a custom hashiObjectId and packageId.`,
             );
         }
         this.#client = client;
         this.#hashiObjectId = resolvedObjectId;
+        this.#packageId = resolvedPackageId;
         this.#bitcoinNetwork = bitcoinNetwork ?? config?.bitcoinNetwork ?? "testnet";
     }
 
@@ -74,12 +82,42 @@ export class HashiClient {
 
     async deposit() {}
     async withdraw() {}
-    async requestSignetFaucet() {}
 
     tx = {};
 
-    // Move call helpers — use generated functions with typed options
-    call = {};
+    // Move call helpers — thin wrappers over generated bindings that auto-inject
+    // the Hashi shared object and the resolved package id. Each returns a thunk
+    // suitable for `tx.add(...)`. Only user-facing Hashi calls are exposed here;
+    // operator/committee calls are intentionally not part of this surface.
+    call = {
+        deposit: (options: { utxo: RawTransactionArgument<string> }) =>
+            depositModule.deposit({
+                package: this.#packageId,
+                arguments: { hashi: this.#hashiObjectId, utxo: options.utxo },
+            }),
+        requestWithdrawal: (options: {
+            btc: RawTransactionArgument<string>;
+            bitcoinAddress: RawTransactionArgument<number[]>;
+        }) =>
+            withdrawModule.requestWithdrawal({
+                package: this.#packageId,
+                arguments: {
+                    hashi: this.#hashiObjectId,
+                    btc: options.btc,
+                    bitcoinAddress: options.bitcoinAddress,
+                },
+            }),
+        /**
+         * Cancel a pending withdrawal request. Returns a `Balance<BTC>` hot potato
+         * that must be consumed in the same PTB (e.g. wrapped into a Coin and
+         * transferred back to the sender).
+         */
+        cancelWithdrawal: (options: { requestId: RawTransactionArgument<string> }) =>
+            withdrawModule.cancelWithdrawal({
+                package: this.#packageId,
+                arguments: { hashi: this.#hashiObjectId, requestId: options.requestId },
+            }),
+    };
 
     view = {
         /**
