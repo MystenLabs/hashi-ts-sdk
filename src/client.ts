@@ -12,7 +12,12 @@ import {
     arkworksToSec1Compressed,
 } from "./bitcoin.js";
 import { DUST_RELAY_MIN_VALUE, NETWORK_CONFIG } from "./constants.js";
-import { HashiConfigError, HashiFetchError } from "./errors.js";
+import {
+    AmountBelowMinimumError,
+    HashiConfigError,
+    HashiFetchError,
+    HashiPausedError,
+} from "./errors.js";
 import type {
     BitcoinNetwork,
     DepositParams,
@@ -115,7 +120,43 @@ export class HashiClient {
         return generateDepositAddressRaw(mpcKey, addressBytes, bitcoinNetwork);
     }
 
-    async deposit() {}
+    /**
+     * Submit one or more Bitcoin deposits for committee confirmation, batched
+     * into a single Sui PTB.
+     *
+     * Reads the full governance snapshot via `view.all()` in one round-trip,
+     * then fails fast (before any PTB is built) if either of the two
+     * deposit-gating invariants the Move side enforces is violated:
+     *
+     *   - `snap.paused === true` → throws `HashiPausedError` (mirrors
+     *     `hashi::assert_unpaused`).
+     *   - any UTXO's `amountSats < snap.bitcoinDepositMinimum` → throws
+     *     `AmountBelowMinimumError` carrying the offending `{amount, minimum,
+     *     vout}` (mirrors `EBelowMinimumDeposit` in `deposit::deposit`).
+     *
+     * Because both checks come from the same snapshot, the validation is
+     * consistent — the user can't see a partial config update between the
+     * pause check and the minimum check.
+     *
+     * Returns an unsigned `Transaction` — the SDK never signs; the caller is
+     * responsible for `signAndExecuteTransaction`.
+     */
+    async deposit(params: DepositParams): Promise<Transaction> {
+        const snap = await this.view.all();
+        if (snap.paused) {
+            throw new HashiPausedError();
+        }
+        for (const { vout, amountSats } of params.utxos) {
+            if (amountSats < snap.bitcoinDepositMinimum) {
+                throw new AmountBelowMinimumError({
+                    amount: amountSats,
+                    minimum: snap.bitcoinDepositMinimum,
+                    vout,
+                });
+            }
+        }
+        return this.tx.deposit(params);
+    }
     async withdraw() {}
 
     // User-facing transaction builders — compose `call.*` thunks into a full

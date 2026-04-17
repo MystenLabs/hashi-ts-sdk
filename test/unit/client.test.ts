@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { HashiClient, hashi } from "../../src/client.js";
-import { HashiConfigError } from "../../src/errors.js";
+import {
+    AmountBelowMinimumError,
+    HashiConfigError,
+    HashiPausedError,
+} from "../../src/errors.js";
 import { Hashi } from "../../src/contracts/hashi/hashi.js";
 import { generateDepositAddress, arkworksToSec1Compressed } from "../../src/bitcoin.js";
 import { SuiGrpcClient } from "@mysten/sui/grpc";
@@ -37,6 +41,46 @@ function sec1ToArkworks(sec1: Uint8Array): Uint8Array {
 const TEST_MPC_KEY_ARKWORKS = sec1ToArkworks(TEST_MPC_KEY);
 
 const TEST_SUI_ADDRESS = "0xabcdef0000000000000000000000000000000000000000000000000000000001";
+
+/**
+ * Build a mocked `Hashi.get()` response with a custom config `contents` array.
+ * Other fields carry minimal-but-valid placeholders so the BCS-decoded json
+ * shape matches what the SDK expects.
+ */
+function mockHashiWithConfig(
+    contents: Array<{ key: string; value: { $kind: string; [k: string]: unknown } }>,
+) {
+    vi.spyOn(Hashi, "get").mockResolvedValueOnce({
+        json: {
+            id: HASHI_OBJECT_ID,
+            committee_set: {
+                members: HASHI_OBJECT_ID,
+                epoch: 0n,
+                committees: HASHI_OBJECT_ID,
+                pending_epoch_change: null,
+                mpc_public_key: [],
+            },
+            config: {
+                config: { contents },
+                enabled_versions: { contents: [] },
+                upgrade_cap: null,
+            },
+            treasury: { objects: HASHI_OBJECT_ID },
+            proposals: HASHI_OBJECT_ID,
+            tob: HASHI_OBJECT_ID,
+            num_consumed_presigs: 0n,
+        },
+    } as never);
+}
+
+const WELL_FORMED_CONFIG = [
+    { key: "paused", value: { $kind: "Bool", Bool: false } },
+    { key: "bitcoin_chain_id", value: { $kind: "Address", Address: `0x${"a".repeat(64)}` } },
+    { key: "bitcoin_deposit_minimum", value: { $kind: "U64", U64: "30000" } },
+    { key: "bitcoin_withdrawal_minimum", value: { $kind: "U64", U64: "30000" } },
+    { key: "bitcoin_confirmation_threshold", value: { $kind: "U64", U64: "6" } },
+    { key: "withdrawal_cancellation_cooldown_ms", value: { $kind: "U64", U64: "3600000" } },
+];
 
 describe("HashiClient", () => {
     let client: SuiGrpcClient & { hashi: HashiClient };
@@ -182,7 +226,78 @@ describe("HashiClient", () => {
     });
 
     describe("deposit", () => {
-        it.todo("creates a deposit");
+        const validTxid = "0x" + "ef".repeat(32);
+
+        it("throws HashiPausedError when the protocol is paused", async () => {
+            mockHashiWithConfig([
+                ...WELL_FORMED_CONFIG.filter((e) => e.key !== "paused"),
+                { key: "paused", value: { $kind: "Bool", Bool: true } },
+            ]);
+
+            await expect(
+                client.hashi.deposit({
+                    txid: validTxid,
+                    utxos: [{ vout: 0, amountSats: 100_000n }],
+                    recipient: TEST_SUI_ADDRESS,
+                }),
+            ).rejects.toBeInstanceOf(HashiPausedError);
+        });
+
+        it("throws AmountBelowMinimumError carrying structured fields for an under-minimum UTXO", async () => {
+            // WELL_FORMED_CONFIG sets bitcoin_deposit_minimum = 30_000 sats.
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
+
+            const promise = client.hashi.deposit({
+                txid: validTxid,
+                utxos: [{ vout: 3, amountSats: 10_000n }],
+                recipient: TEST_SUI_ADDRESS,
+            });
+
+            await expect(promise).rejects.toBeInstanceOf(AmountBelowMinimumError);
+            await expect(promise).rejects.toMatchObject({
+                amount: 10_000n,
+                minimum: 30_000n,
+                vout: 3,
+            });
+        });
+
+        it("builds a batched PTB when all UTXOs meet the minimum", async () => {
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
+
+            const tx = await client.hashi.deposit({
+                txid: validTxid,
+                utxos: [
+                    { vout: 0, amountSats: 100_000n },
+                    { vout: 1, amountSats: 50_000n },
+                ],
+                recipient: TEST_SUI_ADDRESS,
+            });
+
+            expect(tx).toBeInstanceOf(Transaction);
+            const { commands } = tx.getData();
+            expect(commands).toHaveLength(6);
+            expect(commands.map((c) => c.MoveCall?.function)).toEqual([
+                "utxo_id",
+                "utxo",
+                "deposit",
+                "utxo_id",
+                "utxo",
+                "deposit",
+            ]);
+        });
+
+        it("fetches the governance snapshot exactly once per deposit call", async () => {
+            const getSpy = vi.spyOn(Hashi, "get");
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
+
+            await client.hashi.deposit({
+                txid: validTxid,
+                utxos: [{ vout: 0, amountSats: 100_000n }],
+                recipient: TEST_SUI_ADDRESS,
+            });
+
+            expect(getSpy).toHaveBeenCalledTimes(1);
+        });
     });
 
     describe("withdraw", () => {
@@ -290,58 +405,9 @@ describe("HashiClient", () => {
         });
 
         describe("all / governance getters", () => {
-            /**
-             * Build a mocked Hashi.get() response with a custom config contents
-             * array. All other fields carry minimal-but-valid placeholders so
-             * the BCS-decoded json shape matches what the SDK expects.
-             */
-            function mockHashiWithConfig(
-                contents: Array<{
-                    key: string;
-                    value: { $kind: string; [k: string]: unknown };
-                }>,
-            ) {
-                vi.spyOn(Hashi, "get").mockResolvedValueOnce({
-                    json: {
-                        id: HASHI_OBJECT_ID,
-                        committee_set: {
-                            members: HASHI_OBJECT_ID,
-                            epoch: 0n,
-                            committees: HASHI_OBJECT_ID,
-                            pending_epoch_change: null,
-                            mpc_public_key: [],
-                        },
-                        config: {
-                            config: { contents },
-                            enabled_versions: { contents: [] },
-                            upgrade_cap: null,
-                        },
-                        treasury: { objects: HASHI_OBJECT_ID },
-                        proposals: HASHI_OBJECT_ID,
-                        tob: HASHI_OBJECT_ID,
-                        num_consumed_presigs: 0n,
-                    },
-                } as never);
-            }
-
-            const wellFormedContents = [
-                { key: "paused", value: { $kind: "Bool", Bool: false } },
-                {
-                    key: "bitcoin_chain_id",
-                    value: { $kind: "Address", Address: `0x${"a".repeat(64)}` },
-                },
-                { key: "bitcoin_deposit_minimum", value: { $kind: "U64", U64: "30000" } },
-                { key: "bitcoin_withdrawal_minimum", value: { $kind: "U64", U64: "30000" } },
-                { key: "bitcoin_confirmation_threshold", value: { $kind: "U64", U64: "6" } },
-                {
-                    key: "withdrawal_cancellation_cooldown_ms",
-                    value: { $kind: "U64", U64: "3600000" },
-                },
-            ];
-
             it("all() returns a full typed snapshot from one Hashi.get call", async () => {
                 const getSpy = vi.spyOn(Hashi, "get");
-                mockHashiWithConfig(wellFormedContents);
+                mockHashiWithConfig(WELL_FORMED_CONFIG);
 
                 const snap = await client.hashi.view.all();
 
@@ -360,7 +426,7 @@ describe("HashiClient", () => {
 
             it("floors bitcoin_deposit_minimum to DUST_RELAY_MIN_VALUE (546)", async () => {
                 mockHashiWithConfig([
-                    ...wellFormedContents.filter((e) => e.key !== "bitcoin_deposit_minimum"),
+                    ...WELL_FORMED_CONFIG.filter((e) => e.key !== "bitcoin_deposit_minimum"),
                     { key: "bitcoin_deposit_minimum", value: { $kind: "U64", U64: "100" } },
                 ]);
 
@@ -372,7 +438,7 @@ describe("HashiClient", () => {
 
             it("floors bitcoin_withdrawal_minimum to DUST_RELAY_MIN_VALUE + 1 (547)", async () => {
                 mockHashiWithConfig([
-                    ...wellFormedContents.filter((e) => e.key !== "bitcoin_withdrawal_minimum"),
+                    ...WELL_FORMED_CONFIG.filter((e) => e.key !== "bitcoin_withdrawal_minimum"),
                     { key: "bitcoin_withdrawal_minimum", value: { $kind: "U64", U64: "200" } },
                 ]);
 
@@ -383,7 +449,7 @@ describe("HashiClient", () => {
             });
 
             it("throws HashiConfigError naming the missing key", async () => {
-                mockHashiWithConfig(wellFormedContents.filter((e) => e.key !== "paused"));
+                mockHashiWithConfig(WELL_FORMED_CONFIG.filter((e) => e.key !== "paused"));
 
                 await expect(client.hashi.view.all()).rejects.toMatchObject({
                     name: "HashiConfigError",
@@ -395,7 +461,7 @@ describe("HashiClient", () => {
 
             it("throws HashiConfigError when variant is wrong", async () => {
                 mockHashiWithConfig([
-                    ...wellFormedContents.filter((e) => e.key !== "paused"),
+                    ...WELL_FORMED_CONFIG.filter((e) => e.key !== "paused"),
                     { key: "paused", value: { $kind: "U64", U64: "1" } },
                 ]);
 
@@ -409,14 +475,14 @@ describe("HashiClient", () => {
 
             it("each individual view method fetches via all() (one Hashi.get per call)", async () => {
                 const getSpy = vi.spyOn(Hashi, "get");
-                mockHashiWithConfig(wellFormedContents);
+                mockHashiWithConfig(WELL_FORMED_CONFIG);
 
                 expect(await client.hashi.view.paused()).toBe(false);
                 expect(getSpy).toHaveBeenCalledTimes(1);
             });
 
             it("HashiConfigError is instanceof Error and carries structured fields", async () => {
-                mockHashiWithConfig(wellFormedContents.filter((e) => e.key !== "paused"));
+                mockHashiWithConfig(WELL_FORMED_CONFIG.filter((e) => e.key !== "paused"));
 
                 try {
                     await client.hashi.view.all();
