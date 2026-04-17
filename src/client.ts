@@ -263,10 +263,9 @@ export class HashiClient {
     };
 
     /**
-     * Parses the `Hashi.config.config` VecMap contents into a typed snapshot of
-     * all governance values, applying the same floors as the Move accessors.
-     * Throws a structured error if any expected key is missing or has an
-     * unexpected variant — never silently defaults.
+     * Parses the `Hashi.config.config` VecMap contents into a typed snapshot,
+     * applying the same floors as the Move accessors so the SDK matches
+     * on-chain semantics exactly.
      */
     #parseConfig(contents: readonly ConfigEntry[]): GovernanceConfig {
         const u64 = (key: string): bigint => {
@@ -363,26 +362,22 @@ export class HashiClient {
             return this.#parseConfig(contents);
         },
 
-        /** Whether deposits and withdrawals are currently paused by governance. */
         paused: async (): Promise<boolean> => (await this.view.all()).paused,
 
-        /** Minimum deposit in satoshis. Floored at 546 (`DUST_RELAY_MIN_VALUE`). */
+        /** Floored to `DUST_RELAY_MIN_VALUE` if the on-chain value is lower. */
         bitcoinDepositMinimum: async (): Promise<bigint> =>
             (await this.view.all()).bitcoinDepositMinimum,
 
-        /** Minimum withdrawal in satoshis. Floored at 547 (`DUST_RELAY_MIN_VALUE + 1`). */
+        /** Floored to `DUST_RELAY_MIN_VALUE + 1` so `worstCaseNetworkFee` is always ≥ 1. */
         bitcoinWithdrawalMinimum: async (): Promise<bigint> =>
             (await this.view.all()).bitcoinWithdrawalMinimum,
 
-        /** Number of Bitcoin confirmations required before a deposit is accepted. */
         bitcoinConfirmationThreshold: async (): Promise<bigint> =>
             (await this.view.all()).bitcoinConfirmationThreshold,
 
-        /** Cooldown in milliseconds before a pending withdrawal can be cancelled. */
         withdrawalCancellationCooldownMs: async (): Promise<bigint> =>
             (await this.view.all()).withdrawalCancellationCooldownMs,
 
-        /** Bitcoin chain identifier (0x-hex 32-byte address) this Hashi instance binds to. */
         bitcoinChainId: async (): Promise<string> => (await this.view.all()).bitcoinChainId,
 
         /** Alias of `bitcoinDepositMinimum`. */

@@ -20,10 +20,10 @@ export const NUMS_KEY = new Uint8Array([
 ]);
 
 /**
- * Minimum value (satoshis) for a Bitcoin output to be relayed. The Move side
- * uses this as a floor on `bitcoin_deposit_minimum` and `bitcoin_withdrawal_minimum`;
- * the SDK replicates the same floors so `view.*` matches on-chain semantics.
- * Mirrors `DUST_RELAY_MIN_VALUE` in `hashi::btc_config`.
+ * The Move side uses this as a floor on `bitcoin_deposit_minimum` and
+ * `bitcoin_withdrawal_minimum`; the SDK replicates the same floors so `view.*`
+ * matches on-chain semantics. Mirrors `DUST_RELAY_MIN_VALUE` in
+ * `hashi::btc_config`.
  */
 export const DUST_RELAY_MIN_VALUE = 546n;
 
