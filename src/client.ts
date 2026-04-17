@@ -2,6 +2,7 @@ import type { ClientWithCoreApi } from "@mysten/sui/client";
 import { fromHex } from "@mysten/sui/utils";
 import { Transaction, coinWithBalance } from "@mysten/sui/transactions";
 import { Hashi } from "./contracts/hashi/hashi.js";
+import { Value } from "./contracts/hashi/config_value.js";
 import * as depositModule from "./contracts/hashi/deposit.js";
 import * as withdrawModule from "./contracts/hashi/withdraw.js";
 import * as utxoModule from "./contracts/hashi/utxo.js";
@@ -13,6 +14,28 @@ import {
 import { DUST_RELAY_MIN_VALUE, NETWORK_CONFIG } from "./constants.js";
 import { HashiConfigError, HashiFetchError } from "./errors.js";
 import type { BitcoinNetwork, GovernanceConfig, HashiClientOptions, SuiNetwork } from "./types.js";
+
+type ConfigValue = typeof Value.$inferType;
+type ConfigEntry = { key: string; value: ConfigValue };
+
+/**
+ * Find a VecMap entry by key and narrow its `Value` variant. Discriminating
+ * on `$kind` lets TypeScript narrow the returned payload — callers get the
+ * variant-specific fields (e.g. `.U64: string`, `.Bool: boolean`) without
+ * any manual type assertions.
+ */
+function entry<K extends ConfigValue["$kind"]>(
+    contents: readonly ConfigEntry[],
+    key: string,
+    expectedVariant: K,
+): Extract<ConfigValue, { $kind: K }> {
+    const e = contents.find((c) => c.key === key);
+    if (!e) throw HashiConfigError.missing(key, expectedVariant);
+    if (e.value.$kind !== expectedVariant) {
+        throw HashiConfigError.wrongVariant(key, expectedVariant, e.value.$kind);
+    }
+    return e.value as Extract<ConfigValue, { $kind: K }>;
+}
 
 export function hashi<const Name = "hashi">({
     name = "hashi" as Name,
@@ -245,61 +268,22 @@ export class HashiClient {
      * Throws a structured error if any expected key is missing or has an
      * unexpected variant — never silently defaults.
      */
-    #parseConfig(
-        contents: Array<{ key: string; value: { $kind: string; [k: string]: unknown } }>,
-    ): GovernanceConfig {
-        const entry = (key: string, expectedVariant: string) => {
-            const e = contents.find((c) => c.key === key);
-            if (!e) throw HashiConfigError.missing(key, expectedVariant);
-            const actualVariant = String(e.value.$kind ?? "<no $kind>");
-            if (actualVariant !== expectedVariant) {
-                throw HashiConfigError.wrongVariant(key, expectedVariant, actualVariant);
-            }
-            return e.value;
-        };
+    #parseConfig(contents: readonly ConfigEntry[]): GovernanceConfig {
         const u64 = (key: string): bigint => {
-            const v = entry(key, "U64");
-            const raw = v.U64;
-            if (typeof raw !== "string" && typeof raw !== "number" && typeof raw !== "bigint") {
-                throw HashiConfigError.malformedPayload(
-                    key,
-                    "U64",
-                    `expected string|number|bigint, got ${typeof raw}`,
-                );
-            }
+            const v = entry(contents, key, "U64");
             try {
-                return BigInt(raw);
+                return BigInt(v.U64);
             } catch (cause) {
                 throw HashiConfigError.malformedPayload(
                     key,
                     "U64",
-                    `"${String(raw)}" is not a valid integer`,
+                    `"${v.U64}" is not a valid integer`,
                     cause,
                 );
             }
         };
-        const bool = (key: string): boolean => {
-            const v = entry(key, "Bool");
-            if (typeof v.Bool !== "boolean") {
-                throw HashiConfigError.malformedPayload(
-                    key,
-                    "Bool",
-                    `expected boolean, got ${typeof v.Bool}`,
-                );
-            }
-            return v.Bool;
-        };
-        const addr = (key: string): string => {
-            const v = entry(key, "Address");
-            if (typeof v.Address !== "string") {
-                throw HashiConfigError.malformedPayload(
-                    key,
-                    "Address",
-                    `expected string, got ${typeof v.Address}`,
-                );
-            }
-            return v.Address;
-        };
+        const bool = (key: string): boolean => entry(contents, key, "Bool").Bool;
+        const addr = (key: string): string => entry(contents, key, "Address").Address;
 
         const rawDepositMin = u64("bitcoin_deposit_minimum");
         const rawWithdrawalMin = u64("bitcoin_withdrawal_minimum");
