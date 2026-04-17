@@ -1,4 +1,5 @@
 export { HashiClient, hashi } from "./client.js";
+export { HashiConfigError, HashiFetchError } from "./errors.js";
 export {
     generateDepositAddress,
     deriveChildPubkey,

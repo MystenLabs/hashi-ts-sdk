@@ -11,6 +11,7 @@ import {
     arkworksToSec1Compressed,
 } from "./bitcoin.js";
 import { DUST_RELAY_MIN_VALUE, NETWORK_CONFIG } from "./constants.js";
+import { HashiConfigError, HashiFetchError } from "./errors.js";
 import type { BitcoinNetwork, GovernanceConfig, HashiClientOptions, SuiNetwork } from "./types.js";
 
 export function hashi<const Name = "hashi">({
@@ -247,31 +248,57 @@ export class HashiClient {
     #parseConfig(
         contents: Array<{ key: string; value: { $kind: string; [k: string]: unknown } }>,
     ): GovernanceConfig {
-        const entry = (key: string) => {
+        const entry = (key: string, expectedVariant: string) => {
             const e = contents.find((c) => c.key === key);
-            if (!e) throw new Error(`Config key "${key}" not found on-chain.`);
+            if (!e) throw HashiConfigError.missing(key, expectedVariant);
+            const actualVariant = String(e.value.$kind ?? "<no $kind>");
+            if (actualVariant !== expectedVariant) {
+                throw HashiConfigError.wrongVariant(key, expectedVariant, actualVariant);
+            }
             return e.value;
         };
         const u64 = (key: string): bigint => {
-            const v = entry(key);
-            if (v.$kind !== "U64") {
-                throw new Error(`Config key "${key}" is ${v.$kind}, expected U64.`);
+            const v = entry(key, "U64");
+            const raw = v.U64;
+            if (typeof raw !== "string" && typeof raw !== "number" && typeof raw !== "bigint") {
+                throw HashiConfigError.malformedPayload(
+                    key,
+                    "U64",
+                    `expected string|number|bigint, got ${typeof raw}`,
+                );
             }
-            return BigInt(v.U64 as string);
+            try {
+                return BigInt(raw);
+            } catch (cause) {
+                throw HashiConfigError.malformedPayload(
+                    key,
+                    "U64",
+                    `"${String(raw)}" is not a valid integer`,
+                    cause,
+                );
+            }
         };
         const bool = (key: string): boolean => {
-            const v = entry(key);
-            if (v.$kind !== "Bool") {
-                throw new Error(`Config key "${key}" is ${v.$kind}, expected Bool.`);
+            const v = entry(key, "Bool");
+            if (typeof v.Bool !== "boolean") {
+                throw HashiConfigError.malformedPayload(
+                    key,
+                    "Bool",
+                    `expected boolean, got ${typeof v.Bool}`,
+                );
             }
-            return v.Bool as boolean;
+            return v.Bool;
         };
         const addr = (key: string): string => {
-            const v = entry(key);
-            if (v.$kind !== "Address") {
-                throw new Error(`Config key "${key}" is ${v.$kind}, expected Address.`);
+            const v = entry(key, "Address");
+            if (typeof v.Address !== "string") {
+                throw HashiConfigError.malformedPayload(
+                    key,
+                    "Address",
+                    `expected string, got ${typeof v.Address}`,
+                );
             }
-            return v.Address as string;
+            return v.Address;
         };
 
         const rawDepositMin = u64("bitcoin_deposit_minimum");
@@ -329,11 +356,27 @@ export class HashiClient {
          * you all fields from the same on-chain state.
          */
         all: async (): Promise<GovernanceConfig> => {
-            const result = await Hashi.get({
-                client: this.#client,
-                objectId: this.#hashiObjectId,
-            });
-            return this.#parseConfig(result.json.config.config.contents);
+            let result;
+            try {
+                result = await Hashi.get({
+                    client: this.#client,
+                    objectId: this.#hashiObjectId,
+                });
+            } catch (cause) {
+                throw new HashiFetchError(
+                    `Failed to fetch Hashi shared object ${this.#hashiObjectId}.`,
+                    this.#hashiObjectId,
+                    { cause },
+                );
+            }
+            const contents = result.json?.config?.config?.contents;
+            if (!Array.isArray(contents)) {
+                throw new HashiFetchError(
+                    `Hashi object ${this.#hashiObjectId} returned an unexpected shape: config.config.contents is not an array.`,
+                    this.#hashiObjectId,
+                );
+            }
+            return this.#parseConfig(contents);
         },
 
         /** Whether deposits and withdrawals are currently paused by governance. */
