@@ -124,10 +124,42 @@ export class HashiClient {
     tx = {
         /**
          * Build a transaction that submits one or more Bitcoin deposits for
-         * committee confirmation. For every UTXO in `params.utxos`, composes
-         * `utxo::utxo_id` → `utxo::utxo` → `deposit::deposit` inline, so the
-         * `Utxo` structs are constructed and consumed in the same PTB. All
-         * UTXOs must share the same `txid` and go to the same `recipient`.
+         * committee confirmation, batched into a single Sui PTB.
+         *
+         * A single Bitcoin funding tx can pay the same deposit address on
+         * multiple outputs (e.g. change + donation, or a coinjoin). Rather
+         * than forcing the user to submit one Sui tx per output, this method
+         * accepts every qualifying output and emits a dedicated Move-call
+         * triple per UTXO:
+         *
+         *     utxo::utxo_id(txid, vout_i)   → UtxoId
+         *     utxo::utxo(utxoId, amount_i, derivationPath = recipient)  → Utxo
+         *     deposit::deposit(hashi, utxo)
+         *
+         * The triples are emitted in `params.utxos` order, so N UTXOs yield
+         * exactly `3 * N` PTB commands. Each `Utxo` hot-potato is built and
+         * immediately consumed by the next `deposit::deposit` call in the
+         * sequence — none of them ever leak out of the PTB.
+         *
+         * Because all triples live in one PTB, execution is atomic: either
+         * every deposit is recorded, or none are (any abort — wrong minimum,
+         * replayed UTXO, paused system — reverts the whole transaction).
+         *
+         * All UTXOs must share the same `txid` (enforced at the type level
+         * via `DepositParams`) and are credited to the same `recipient`.
+         *
+         * @example
+         * ```ts
+         * const tx = client.hashi.tx.deposit({
+         *   txid: `0x${btcTxid}`,
+         *   utxos: [
+         *     { vout: 0, amountSats: 100_000n },
+         *     { vout: 2, amountSats:  50_000n },
+         *   ],
+         *   recipient: signer.toSuiAddress(),
+         * });
+         * await client.signAndExecuteTransaction({ signer, transaction: tx });
+         * ```
          */
         deposit: (params: DepositParams): Transaction => {
             const tx = new Transaction();
