@@ -11,7 +11,7 @@ import {
     arkworksToSec1Compressed,
 } from "./bitcoin.js";
 import { DUST_RELAY_MIN_VALUE, NETWORK_CONFIG } from "./constants.js";
-import type { BitcoinNetwork, HashiClientOptions, SuiNetwork } from "./types.js";
+import type { BitcoinNetwork, GovernanceConfig, HashiClientOptions, SuiNetwork } from "./types.js";
 
 export function hashi<const Name = "hashi">({
     name = "hashi" as Name,
@@ -368,16 +368,4 @@ export class HashiClient {
         worstCaseNetworkFee: async (): Promise<bigint> =>
             (await this.view.all()).worstCaseNetworkFee,
     };
-}
-
-/** Typed snapshot of all governance-controlled protocol parameters. */
-export interface GovernanceConfig {
-    paused: boolean;
-    bitcoinChainId: string;
-    bitcoinDepositMinimum: bigint;
-    bitcoinWithdrawalMinimum: bigint;
-    bitcoinConfirmationThreshold: bigint;
-    withdrawalCancellationCooldownMs: bigint;
-    depositMinimum: bigint;
-    worstCaseNetworkFee: bigint;
 }
