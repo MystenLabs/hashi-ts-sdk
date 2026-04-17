@@ -73,3 +73,38 @@ export class HashiFetchError extends Error {
         this.hashiObjectId = hashiObjectId;
     }
 }
+
+/**
+ * Thrown by `HashiClient.deposit()` when a UTXO's amount is below the live
+ * on-chain deposit minimum. Raised before any PTB is built so callers never
+ * burn gas on a transaction that would abort with `EBelowMinimumDeposit`.
+ */
+export class AmountBelowMinimumError extends Error {
+    readonly amount: bigint;
+    readonly minimum: bigint;
+    readonly vout: number;
+
+    constructor(details: { amount: bigint; minimum: bigint; vout: number }) {
+        super(
+            `UTXO at vout ${details.vout} has amount ${details.amount} sats, ` +
+                `below the protocol minimum of ${details.minimum} sats.`,
+        );
+        this.name = "AmountBelowMinimumError";
+        this.amount = details.amount;
+        this.minimum = details.minimum;
+        this.vout = details.vout;
+    }
+}
+
+/**
+ * Thrown by user-facing entry points when `Hashi.config.paused` is `true`.
+ * Mirrors the Move-side `ESystemPaused` abort in `hashi::assert_unpaused` so
+ * the SDK can fail early with a typed error instead of a gas-burning on-chain
+ * abort.
+ */
+export class HashiPausedError extends Error {
+    constructor(message = "Hashi protocol is currently paused.") {
+        super(message);
+        this.name = "HashiPausedError";
+    }
+}
