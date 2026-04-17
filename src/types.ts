@@ -39,11 +39,13 @@ export interface GovernanceConfig {
     readonly worstCaseNetworkFee: bigint;
 }
 
-/** A single UTXO output within a Bitcoin transaction used to fund a deposit. */
+/**
+ * A single UTXO output within a Bitcoin transaction used to fund a deposit.
+ * `vout` is the output index (Bitcoin u32); `amountSats` must be ≥ the
+ * on-chain deposit minimum (enforced at deposit time).
+ */
 export interface UtxoOutput {
-    /** Output index (u32) within the Bitcoin transaction. */
     readonly vout: number;
-    /** Amount in satoshis. Must be ≥ the on-chain deposit minimum. */
     readonly amountSats: bigint;
 }
 

@@ -12,11 +12,13 @@ import {
     arkworksToSec1Compressed,
 } from "./bitcoin.js";
 import { DUST_RELAY_MIN_VALUE, NETWORK_CONFIG } from "./constants.js";
+import type { AmountViolation } from "./errors.js";
 import {
     AmountBelowMinimumError,
     HashiConfigError,
     HashiFetchError,
     HashiPausedError,
+    InvalidDepositParamsError,
 } from "./errors.js";
 import type {
     BitcoinNetwork,
@@ -28,6 +30,21 @@ import type {
 
 type ConfigValue = typeof Value.$inferType;
 type ConfigEntry = { key: string; value: ConfigValue };
+
+/** 0x-prefixed 32-byte hex (66 chars). Matches Sui addresses and Bitcoin txids. */
+const HEX32_RE = /^0x[0-9a-fA-F]{64}$/;
+
+/** Max value of an unsigned 32-bit integer; vout is a u32 on the Bitcoin side. */
+const U32_MAX = 0xffffffff;
+
+function assertHex32(value: unknown, fieldName: string): void {
+    if (typeof value !== "string" || !HEX32_RE.test(value)) {
+        throw new InvalidDepositParamsError({
+            reason: `\`${fieldName}\` must be a 0x-prefixed 32-byte hex string`,
+            detail: `got ${JSON.stringify(value)}`,
+        });
+    }
+}
 
 /**
  * Find a VecMap entry by key and narrow its `Value` variant. Discriminating
@@ -60,6 +77,21 @@ export function hashi<const Name = "hashi">({
     };
 }
 
+/**
+ * User-facing SDK client for the Hashi protocol. Constructed via the
+ * `hashi({...})` factory and attached to any Sui client via `$extend`:
+ *
+ * ```ts
+ * const client = new SuiGrpcClient({ ... }).$extend(hashi({ network: "devnet" }));
+ * await client.hashi.deposit({ ... });
+ * ```
+ *
+ * **The SDK never signs or submits transactions.** All `tx.*` builders and
+ * higher-level direct methods (`deposit`, `withdraw`) return unsigned
+ * `Transaction` objects — the caller signs and submits via
+ * `signAndExecuteTransaction` (or an equivalent flow). This keeps signer
+ * ergonomics (wallets, sponsors, hardware) decoupled from SDK logic.
+ */
 export class HashiClient {
     #client: ClientWithCoreApi;
     #hashiObjectId: string;
@@ -122,42 +154,78 @@ export class HashiClient {
 
     /**
      * Submit one or more Bitcoin deposits for committee confirmation, batched
-     * into a single Sui PTB.
+     * into a single Sui PTB. Returns an unsigned `Transaction`.
      *
-     * Reads the full governance snapshot via `view.all()` in one round-trip,
-     * then fails fast (before any PTB is built) if either of the two
-     * deposit-gating invariants the Move side enforces is violated:
+     * The method runs three preflight stages before returning:
      *
-     *   - `snap.paused === true` → throws `HashiPausedError` (mirrors
-     *     `hashi::assert_unpaused`).
-     *   - any UTXO's `amountSats < snap.bitcoinDepositMinimum` → throws
-     *     `AmountBelowMinimumError` carrying the offending `{amount, minimum,
-     *     vout}` (mirrors `EBelowMinimumDeposit` in `deposit::deposit`).
+     *   1. **Structural validation** — `txid` and `recipient` must be
+     *      0x-prefixed 32-byte hex; `utxos` must be non-empty; every `vout`
+     *      must be a non-negative u32 and unique within the call. Violations
+     *      throw `InvalidDepositParamsError` without any chain read.
+     *   2. **Pause check** — reads the governance snapshot via `view.all()`
+     *      and throws `HashiPausedError` if `paused` is `true`. Mirrors the
+     *      Move-side `hashi::assert_unpaused`.
+     *   3. **Minimum check** — every UTXO must have `amountSats ≥
+     *      snap.bitcoinDepositMinimum`. All offenders are collected into one
+     *      `AmountBelowMinimumError`, so callers can fix the batch in one
+     *      round-trip. Mirrors `EBelowMinimumDeposit` in `deposit::deposit`.
      *
-     * Because both checks come from the same snapshot, the validation is
-     * consistent — the user can't see a partial config update between the
-     * pause check and the minimum check.
-     *
-     * Returns an unsigned `Transaction` — the SDK never signs; the caller is
-     * responsible for `signAndExecuteTransaction`.
+     * Both chain-reading checks (2, 3) read from the same `view.all()`
+     * snapshot, so validation is internally consistent. Chain state can still
+     * drift between the snapshot and execution — the Move side re-asserts
+     * both invariants, so a genuine race simply aborts the tx.
      */
     async deposit(params: DepositParams): Promise<Transaction> {
+        this.#validateDepositParams(params);
+
         const snap = await this.view.all();
         if (snap.paused) {
-            throw new HashiPausedError();
+            throw new HashiPausedError({ operation: "deposit" });
         }
+
+        const violations: AmountViolation[] = [];
         for (const { vout, amountSats } of params.utxos) {
             if (amountSats < snap.bitcoinDepositMinimum) {
-                throw new AmountBelowMinimumError({
+                violations.push({
                     amount: amountSats,
                     minimum: snap.bitcoinDepositMinimum,
                     vout,
                 });
             }
         }
+        if (violations.length > 0) {
+            throw new AmountBelowMinimumError({ violations });
+        }
+
         return this.tx.deposit(params);
     }
     async withdraw() {}
+
+    #validateDepositParams(params: DepositParams): void {
+        assertHex32(params.txid, "txid");
+        assertHex32(params.recipient, "recipient");
+        if (params.utxos.length === 0) {
+            throw new InvalidDepositParamsError({
+                reason: "`utxos` must contain at least one UTXO",
+            });
+        }
+        const seen = new Set<number>();
+        for (const { vout } of params.utxos) {
+            if (!Number.isInteger(vout) || vout < 0 || vout > U32_MAX) {
+                throw new InvalidDepositParamsError({
+                    reason: "`vout` must be a non-negative u32 integer",
+                    detail: `got ${JSON.stringify(vout)}`,
+                });
+            }
+            if (seen.has(vout)) {
+                throw new InvalidDepositParamsError({
+                    reason: "duplicate `vout` within a single deposit",
+                    detail: `vout ${vout} appears more than once (each output of a single txid must be unique)`,
+                });
+            }
+            seen.add(vout);
+        }
+    }
 
     // User-facing transaction builders — compose `call.*` thunks into a full
     // PTB and return the unsigned `Transaction`. Execution (sign + dry-run +
@@ -178,16 +246,14 @@ export class HashiClient {
          *     deposit::deposit(hashi, utxo)
          *
          * The triples are emitted in `params.utxos` order, so N UTXOs yield
-         * exactly `3 * N` PTB commands. Each `Utxo` hot-potato is built and
-         * immediately consumed by the next `deposit::deposit` call in the
-         * sequence — none of them ever leak out of the PTB.
+         * exactly `3 * N` PTB commands.
          *
          * Because all triples live in one PTB, execution is atomic: either
          * every deposit is recorded, or none are (any abort — wrong minimum,
          * replayed UTXO, paused system — reverts the whole transaction).
          *
-         * All UTXOs must share the same `txid` (enforced at the type level
-         * via `DepositParams`) and are credited to the same `recipient`.
+         * All UTXOs share the `txid` because `DepositParams` has a single
+         * top-level `txid` field, and are credited to the same `recipient`.
          *
          * @example
          * ```ts

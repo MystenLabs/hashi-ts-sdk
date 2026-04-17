@@ -4,7 +4,9 @@ export {
     HashiConfigError,
     HashiFetchError,
     HashiPausedError,
+    InvalidDepositParamsError,
 } from "./errors.js";
+export type { AmountViolation } from "./errors.js";
 export {
     generateDepositAddress,
     deriveChildPubkey,

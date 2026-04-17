@@ -4,6 +4,7 @@ import {
     AmountBelowMinimumError,
     HashiConfigError,
     HashiPausedError,
+    InvalidDepositParamsError,
 } from "../../src/errors.js";
 import { Hashi } from "../../src/contracts/hashi/hashi.js";
 import { generateDepositAddress, arkworksToSec1Compressed } from "../../src/bitcoin.js";
@@ -234,31 +235,76 @@ describe("HashiClient", () => {
                 { key: "paused", value: { $kind: "Bool", Bool: true } },
             ]);
 
+            const promise = client.hashi.deposit({
+                txid: validTxid,
+                utxos: [{ vout: 0, amountSats: 100_000n }],
+                recipient: TEST_SUI_ADDRESS,
+            });
+
+            await expect(promise).rejects.toBeInstanceOf(HashiPausedError);
+            await expect(promise).rejects.toMatchObject({ operation: "deposit" });
+        });
+
+        it("prefers HashiPausedError over AmountBelowMinimumError when both would apply", async () => {
+            // Pause check must run before the minimum check — if these two
+            // fired in the wrong order a user depositing dust into a paused
+            // system would see the wrong recovery signal.
+            mockHashiWithConfig([
+                ...WELL_FORMED_CONFIG.filter((e) => e.key !== "paused"),
+                { key: "paused", value: { $kind: "Bool", Bool: true } },
+            ]);
+
             await expect(
                 client.hashi.deposit({
                     txid: validTxid,
-                    utxos: [{ vout: 0, amountSats: 100_000n }],
+                    utxos: [{ vout: 0, amountSats: 1n }], // well below 30 000
                     recipient: TEST_SUI_ADDRESS,
                 }),
             ).rejects.toBeInstanceOf(HashiPausedError);
         });
 
-        it("throws AmountBelowMinimumError carrying structured fields for an under-minimum UTXO", async () => {
+        it("throws AmountBelowMinimumError carrying every violation for an under-minimum batch", async () => {
             // WELL_FORMED_CONFIG sets bitcoin_deposit_minimum = 30_000 sats.
             mockHashiWithConfig(WELL_FORMED_CONFIG);
 
             const promise = client.hashi.deposit({
                 txid: validTxid,
-                utxos: [{ vout: 3, amountSats: 10_000n }],
+                utxos: [
+                    { vout: 1, amountSats: 10_000n },
+                    { vout: 3, amountSats: 50_000n }, // passes
+                    { vout: 7, amountSats: 20_000n },
+                ],
                 recipient: TEST_SUI_ADDRESS,
             });
 
             await expect(promise).rejects.toBeInstanceOf(AmountBelowMinimumError);
             await expect(promise).rejects.toMatchObject({
-                amount: 10_000n,
-                minimum: 30_000n,
-                vout: 3,
+                violations: [
+                    { amount: 10_000n, minimum: 30_000n, vout: 1 },
+                    { amount: 20_000n, minimum: 30_000n, vout: 7 },
+                ],
             });
+        });
+
+        it("accepts a UTXO at exactly the minimum (boundary = pass)", async () => {
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
+            const tx = await client.hashi.deposit({
+                txid: validTxid,
+                utxos: [{ vout: 0, amountSats: 30_000n }],
+                recipient: TEST_SUI_ADDRESS,
+            });
+            expect(tx).toBeInstanceOf(Transaction);
+        });
+
+        it("rejects a UTXO one sat below the minimum (boundary = fail)", async () => {
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
+            await expect(
+                client.hashi.deposit({
+                    txid: validTxid,
+                    utxos: [{ vout: 0, amountSats: 29_999n }],
+                    recipient: TEST_SUI_ADDRESS,
+                }),
+            ).rejects.toBeInstanceOf(AmountBelowMinimumError);
         });
 
         it("builds a batched PTB when all UTXOs meet the minimum", async () => {
@@ -297,6 +343,79 @@ describe("HashiClient", () => {
             });
 
             expect(getSpy).toHaveBeenCalledTimes(1);
+        });
+
+        describe("structural validation (no chain read)", () => {
+            it("rejects a malformed txid before reading chain state", async () => {
+                const getSpy = vi.spyOn(Hashi, "get");
+                await expect(
+                    client.hashi.deposit({
+                        txid: "0xabc", // too short
+                        utxos: [{ vout: 0, amountSats: 100_000n }],
+                        recipient: TEST_SUI_ADDRESS,
+                    }),
+                ).rejects.toBeInstanceOf(InvalidDepositParamsError);
+                expect(getSpy).not.toHaveBeenCalled();
+            });
+
+            it("rejects a malformed recipient", async () => {
+                await expect(
+                    client.hashi.deposit({
+                        txid: validTxid,
+                        utxos: [{ vout: 0, amountSats: 100_000n }],
+                        recipient: "not-a-sui-address",
+                    }),
+                ).rejects.toBeInstanceOf(InvalidDepositParamsError);
+            });
+
+            it("rejects an empty utxos array", async () => {
+                await expect(
+                    client.hashi.deposit({
+                        txid: validTxid,
+                        utxos: [],
+                        recipient: TEST_SUI_ADDRESS,
+                    }),
+                ).rejects.toMatchObject({
+                    name: "InvalidDepositParamsError",
+                    reason: expect.stringContaining("at least one UTXO"),
+                });
+            });
+
+            it("rejects duplicate vouts within a single deposit", async () => {
+                await expect(
+                    client.hashi.deposit({
+                        txid: validTxid,
+                        utxos: [
+                            { vout: 0, amountSats: 100_000n },
+                            { vout: 0, amountSats: 50_000n },
+                        ],
+                        recipient: TEST_SUI_ADDRESS,
+                    }),
+                ).rejects.toMatchObject({
+                    name: "InvalidDepositParamsError",
+                    reason: expect.stringContaining("duplicate `vout`"),
+                });
+            });
+
+            it("rejects a non-integer vout", async () => {
+                await expect(
+                    client.hashi.deposit({
+                        txid: validTxid,
+                        utxos: [{ vout: 1.5, amountSats: 100_000n }],
+                        recipient: TEST_SUI_ADDRESS,
+                    }),
+                ).rejects.toBeInstanceOf(InvalidDepositParamsError);
+            });
+
+            it("rejects a negative vout", async () => {
+                await expect(
+                    client.hashi.deposit({
+                        txid: validTxid,
+                        utxos: [{ vout: -1, amountSats: 100_000n }],
+                        recipient: TEST_SUI_ADDRESS,
+                    }),
+                ).rejects.toBeInstanceOf(InvalidDepositParamsError);
+            });
         });
     });
 
