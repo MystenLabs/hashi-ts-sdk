@@ -1,4 +1,5 @@
 export { HashiClient, hashi } from "./client.js";
+export type { GovernanceConfig } from "./client.js";
 export {
     generateDepositAddress,
     deriveChildPubkey,
