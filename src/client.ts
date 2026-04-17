@@ -13,7 +13,13 @@ import {
 } from "./bitcoin.js";
 import { DUST_RELAY_MIN_VALUE, NETWORK_CONFIG } from "./constants.js";
 import { HashiConfigError, HashiFetchError } from "./errors.js";
-import type { BitcoinNetwork, GovernanceConfig, HashiClientOptions, SuiNetwork } from "./types.js";
+import type {
+    BitcoinNetwork,
+    DepositParams,
+    GovernanceConfig,
+    HashiClientOptions,
+    SuiNetwork,
+} from "./types.js";
 
 type ConfigValue = typeof Value.$inferType;
 type ConfigEntry = { key: string; value: ConfigValue };
@@ -117,43 +123,33 @@ export class HashiClient {
     // submit) is the direct-method layer's concern and happens elsewhere.
     tx = {
         /**
-         * Build a transaction that submits a Bitcoin deposit for committee
-         * confirmation. Composes `utxo::utxo_id` → `utxo::utxo` → `deposit::deposit`
-         * in a single PTB so the `Utxo` struct is constructed inline.
+         * Build a transaction that submits one or more Bitcoin deposits for
+         * committee confirmation. For every UTXO in `params.utxos`, composes
+         * `utxo::utxo_id` → `utxo::utxo` → `deposit::deposit` inline, so the
+         * `Utxo` structs are constructed and consumed in the same PTB. All
+         * UTXOs must share the same `txid` and go to the same `recipient`.
          */
-        deposit: (options: {
-            /** 0x-prefixed 32-byte Bitcoin txid of the funding transaction. */
-            txid: string;
-            /** Output index (u32) within that Bitcoin transaction. */
-            vout: number;
-            /** Amount in sats (u64). Must be ≥ the on-chain deposit minimum. */
-            amount: bigint;
-            /**
-             * Sui address that should receive the minted BTC — goes into the
-             * deposit's `derivation_path` as `Some(addr)`. Typically the same
-             * address used to derive the Bitcoin deposit address via
-             * `generateDepositAddress`.
-             */
-            suiAddress: string;
-        }): Transaction => {
+        deposit: (params: DepositParams): Transaction => {
             const tx = new Transaction();
-            const utxoId = tx.add(
-                utxoModule.utxoId({
-                    package: this.#packageId,
-                    arguments: { txid: options.txid, vout: options.vout },
-                }),
-            );
-            const utxo = tx.add(
-                utxoModule.utxo({
-                    package: this.#packageId,
-                    arguments: {
-                        utxoId,
-                        amount: options.amount,
-                        derivationPath: options.suiAddress,
-                    },
-                }),
-            );
-            tx.add(this.call.deposit({ utxo }));
+            for (const { vout, amountSats } of params.utxos) {
+                const utxoId = tx.add(
+                    utxoModule.utxoId({
+                        package: this.#packageId,
+                        arguments: { txid: params.txid, vout },
+                    }),
+                );
+                const utxo = tx.add(
+                    utxoModule.utxo({
+                        package: this.#packageId,
+                        arguments: {
+                            utxoId,
+                            amount: amountSats,
+                            derivationPath: params.recipient,
+                        },
+                    }),
+                );
+                tx.add(this.call.deposit({ utxo }));
+            }
             return tx;
         },
 

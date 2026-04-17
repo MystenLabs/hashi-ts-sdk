@@ -431,12 +431,11 @@ describe("HashiClient", () => {
 
     describe("tx", () => {
         describe("deposit", () => {
-            it("composes utxo_id + utxo + deposit", () => {
+            it("composes utxo_id + utxo + deposit for a single UTXO", () => {
                 const tx = client.hashi.tx.deposit({
                     txid: "0x" + "ab".repeat(32),
-                    vout: 0,
-                    amount: 100_000n,
-                    suiAddress: TEST_SUI_ADDRESS,
+                    utxos: [{ vout: 0, amountSats: 100_000n }],
+                    recipient: TEST_SUI_ADDRESS,
                 });
                 expect(tx).toBeInstanceOf(Transaction);
 
@@ -451,6 +450,30 @@ describe("HashiClient", () => {
 
                 expect(commands[2].$kind).toBe("MoveCall");
                 expect(commands[2].MoveCall?.function).toBe("deposit");
+            });
+
+            it("batches multiple UTXOs into one PTB (one triple per UTXO)", () => {
+                const tx = client.hashi.tx.deposit({
+                    txid: "0x" + "cd".repeat(32),
+                    utxos: [
+                        { vout: 0, amountSats: 100_000n },
+                        { vout: 2, amountSats: 50_000n },
+                    ],
+                    recipient: TEST_SUI_ADDRESS,
+                });
+
+                const { commands } = tx.getData();
+                expect(commands).toHaveLength(6);
+
+                const functions = commands.map((c) => c.MoveCall?.function);
+                expect(functions).toEqual([
+                    "utxo_id",
+                    "utxo",
+                    "deposit",
+                    "utxo_id",
+                    "utxo",
+                    "deposit",
+                ]);
             });
         });
 
