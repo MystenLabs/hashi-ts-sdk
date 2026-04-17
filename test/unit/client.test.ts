@@ -319,9 +319,7 @@ describe("HashiClient", () => {
 
                 expect(commands[1].$kind).toBe("MoveCall");
                 expect(commands[1].MoveCall?.function).toBe("from_balance");
-                expect(commands[1].MoveCall?.typeArguments).toEqual([
-                    `${PACKAGE_ID}::btc::BTC`,
-                ]);
+                expect(commands[1].MoveCall?.typeArguments).toEqual([`${PACKAGE_ID}::btc::BTC`]);
 
                 expect(commands[2].$kind).toBe("TransferObjects");
             });
@@ -338,18 +336,12 @@ describe("HashiClient", () => {
                 const { commands } = tx.getData();
                 const moveCalls = commands.filter((c) => c.$kind === "MoveCall");
 
-                const intoBalance = moveCalls.find(
-                    (c) => c.MoveCall?.function === "into_balance",
-                );
-                expect(intoBalance?.MoveCall?.typeArguments).toEqual([
-                    `${PACKAGE_ID}::btc::BTC`,
-                ]);
+                const intoBalance = moveCalls.find((c) => c.MoveCall?.function === "into_balance");
+                expect(intoBalance?.MoveCall?.typeArguments).toEqual([`${PACKAGE_ID}::btc::BTC`]);
 
-                expect(
-                    moveCalls.some(
-                        (c) => c.MoveCall?.function === "request_withdrawal",
-                    ),
-                ).toBe(true);
+                expect(moveCalls.some((c) => c.MoveCall?.function === "request_withdrawal")).toBe(
+                    true,
+                );
             });
         });
     });

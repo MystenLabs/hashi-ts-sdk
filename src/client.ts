@@ -188,9 +188,7 @@ export class HashiClient {
             recipient: string;
         }): Transaction => {
             const tx = new Transaction();
-            const balance = tx.add(
-                this.call.cancelWithdrawal({ requestId: options.requestId }),
-            );
+            const balance = tx.add(this.call.cancelWithdrawal({ requestId: options.requestId }));
             const [coin] = tx.moveCall({
                 package: "0x2",
                 module: "coin",
