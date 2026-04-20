@@ -7,7 +7,7 @@ import {
     InvalidDepositParamsError,
 } from "../../src/errors.js";
 import { Hashi } from "../../src/contracts/hashi/hashi.js";
-import { generateDepositAddress, arkworksToSec1Compressed } from "../../src/bitcoin.js";
+import { generateDepositAddress } from "../../src/bitcoin.js";
 import { SuiGrpcClient } from "@mysten/sui/grpc";
 import { Transaction } from "@mysten/sui/transactions";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
