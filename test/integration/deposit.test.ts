@@ -34,64 +34,60 @@ if (!TEST_PK) {
 }
 
 describe("HashiClient.deposit (signet + devnet, real network)", () => {
-    it(
-        "submits a real deposit for an existing signet UTXO and emits DepositRequestedEvent",
-        async () => {
-            const kp = Ed25519Keypair.fromSecretKey(decodeSuiPrivateKey(TEST_PK).secretKey);
-            const recipient = kp.toSuiAddress();
+    it("submits a real deposit for an existing signet UTXO and emits DepositRequestedEvent", async () => {
+        const kp = Ed25519Keypair.fromSecretKey(decodeSuiPrivateKey(TEST_PK).secretKey);
+        const recipient = kp.toSuiAddress();
 
-            const client = new SuiGrpcClient({
-                network: "devnet",
-                baseUrl: "https://fullnode.devnet.sui.io:443",
-            }).$extend(hashi({ network: "devnet" }));
+        const client = new SuiGrpcClient({
+            network: "devnet",
+            baseUrl: "https://fullnode.devnet.sui.io:443",
+        }).$extend(hashi({ network: "devnet" }));
 
-            const btcAddress = await client.hashi.generateDepositAddress({
-                suiAddress: recipient,
-            });
+        const btcAddress = await client.hashi.generateDepositAddress({
+            suiAddress: recipient,
+        });
 
-            const res = await fetch(`https://mempool.space/signet/api/address/${btcAddress}/utxo`);
-            if (!res.ok) {
-                throw new Error(
-                    `mempool.space lookup failed for ${btcAddress}: ${res.status} ${res.statusText}`,
-                );
-            }
-            const utxos = (await res.json()) as Array<{
-                txid: string;
-                vout: number;
-                value: number;
-            }>;
-            if (utxos.length === 0) {
-                throw new Error(
-                    `Signet address ${btcAddress} has no UTXOs. Top it up at ` +
-                        `https://signetfaucet.com/ and re-run.`,
-                );
-            }
-
-            const u = utxos[0];
-            const tx = await client.hashi.deposit({
-                txid: `0x${u.txid}`,
-                utxos: [{ vout: u.vout, amountSats: BigInt(u.value) }],
-                recipient,
-            });
-
-            const result = await client.signAndExecuteTransaction({
-                signer: kp,
-                transaction: tx,
-                include: { effects: true, events: true },
-            });
-
-            // Discriminated union — a failed execution lands under FailedTransaction.
-            expect(result.$kind).toBe("Transaction");
-            if (result.$kind !== "Transaction") {
-                throw new Error(`Transaction failed: ${JSON.stringify(result.FailedTransaction)}`);
-            }
-            expect(result.Transaction.status.success).toBe(true);
-
-            const evt = result.Transaction.events?.find((e) =>
-                e.eventType.endsWith("::deposit::DepositRequestedEvent"),
+        const res = await fetch(`https://mempool.space/signet/api/address/${btcAddress}/utxo`);
+        if (!res.ok) {
+            throw new Error(
+                `mempool.space lookup failed for ${btcAddress}: ${res.status} ${res.statusText}`,
             );
-            expect(evt).toBeDefined();
-        },
-        120_000,
-    );
+        }
+        const utxos = (await res.json()) as Array<{
+            txid: string;
+            vout: number;
+            value: number;
+        }>;
+        if (utxos.length === 0) {
+            throw new Error(
+                `Signet address ${btcAddress} has no UTXOs. Top it up at ` +
+                    `https://signetfaucet.com/ and re-run.`,
+            );
+        }
+
+        const u = utxos[0];
+        const tx = await client.hashi.deposit({
+            txid: `0x${u.txid}`,
+            utxos: [{ vout: u.vout, amountSats: BigInt(u.value) }],
+            recipient,
+        });
+
+        const result = await client.signAndExecuteTransaction({
+            signer: kp,
+            transaction: tx,
+            include: { effects: true, events: true },
+        });
+
+        // Discriminated union — a failed execution lands under FailedTransaction.
+        expect(result.$kind).toBe("Transaction");
+        if (result.$kind !== "Transaction") {
+            throw new Error(`Transaction failed: ${JSON.stringify(result.FailedTransaction)}`);
+        }
+        expect(result.Transaction.status.success).toBe(true);
+
+        const evt = result.Transaction.events?.find((e) =>
+            e.eventType.endsWith("::deposit::DepositRequestedEvent"),
+        );
+        expect(evt).toBeDefined();
+    }, 120_000);
 });
