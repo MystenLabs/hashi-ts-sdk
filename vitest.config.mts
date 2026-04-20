@@ -7,7 +7,9 @@ import { defineConfig } from "vitest/config";
 // vitest/vite doesn't forward `.env` into `process.env` for Node-style
 // reads — it only populates `import.meta.env`, filtered to VITE_* keys by
 // default. Integration tests use `process.env.HASHI_E2E_SUI_PRIVATE_KEY`,
-// so parse `.env` here and inject every key verbatim via `test.env`.
+// so parse `.env` here and inject missing keys via `test.env`. Shell and
+// CI-provided env vars (e.g. GitHub Actions secrets) take precedence over
+// the local `.env`, which is treated as a fallback for local dev only.
 function loadDotEnv(path: string): Record<string, string> {
     const env: Record<string, string> = {};
     let raw: string;
@@ -22,6 +24,7 @@ function loadDotEnv(path: string): Record<string, string> {
         const eq = trimmed.indexOf("=");
         if (eq === -1) continue;
         const key = trimmed.slice(0, eq).trim();
+        if (key in process.env) continue;
         let value = trimmed.slice(eq + 1).trim();
         if (
             (value.startsWith('"') && value.endsWith('"')) ||
