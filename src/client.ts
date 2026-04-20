@@ -2,6 +2,7 @@ import type { ClientWithCoreApi } from "@mysten/sui/client";
 import { fromHex } from "@mysten/sui/utils";
 import { Transaction, coinWithBalance } from "@mysten/sui/transactions";
 import { Hashi } from "./contracts/hashi/hashi.js";
+import { Value } from "./contracts/hashi/config_value.js";
 import * as depositModule from "./contracts/hashi/deposit.js";
 import * as withdrawModule from "./contracts/hashi/withdraw.js";
 import * as utxoModule from "./contracts/hashi/utxo.js";
@@ -10,8 +11,31 @@ import {
     generateDepositAddress as generateDepositAddressRaw,
     arkworksToSec1Compressed,
 } from "./bitcoin.js";
-import { NETWORK_CONFIG } from "./constants.js";
-import type { BitcoinNetwork, HashiClientOptions, SuiNetwork } from "./types.js";
+import { DUST_RELAY_MIN_VALUE, NETWORK_CONFIG } from "./constants.js";
+import { HashiConfigError, HashiFetchError } from "./errors.js";
+import type { BitcoinNetwork, GovernanceConfig, HashiClientOptions, SuiNetwork } from "./types.js";
+
+type ConfigValue = typeof Value.$inferType;
+type ConfigEntry = { key: string; value: ConfigValue };
+
+/**
+ * Find a VecMap entry by key and narrow its `Value` variant. Discriminating
+ * on `$kind` lets TypeScript narrow the returned payload — callers get the
+ * variant-specific fields (e.g. `.U64: string`, `.Bool: boolean`) without
+ * any manual type assertions.
+ */
+function entry<K extends ConfigValue["$kind"]>(
+    contents: readonly ConfigEntry[],
+    key: string,
+    expectedVariant: K,
+): Extract<ConfigValue, { $kind: K }> {
+    const e = contents.find((c) => c.key === key);
+    if (!e) throw HashiConfigError.missing(key, expectedVariant);
+    if (e.value.$kind !== expectedVariant) {
+        throw HashiConfigError.wrongVariant(key, expectedVariant, e.value.$kind);
+    }
+    return e.value as Extract<ConfigValue, { $kind: K }>;
+}
 
 export function hashi<const Name = "hashi">({
     name = "hashi" as Name,
@@ -238,6 +262,49 @@ export class HashiClient {
             }),
     };
 
+    /**
+     * Parses the `Hashi.config.config` VecMap contents into a typed snapshot,
+     * applying the same floors as the Move accessors so the SDK matches
+     * on-chain semantics exactly.
+     */
+    #parseConfig(contents: readonly ConfigEntry[]): GovernanceConfig {
+        const u64 = (key: string): bigint => {
+            const v = entry(contents, key, "U64");
+            try {
+                return BigInt(v.U64);
+            } catch (cause) {
+                throw HashiConfigError.malformedPayload(
+                    key,
+                    "U64",
+                    `"${v.U64}" is not a valid integer`,
+                    cause,
+                );
+            }
+        };
+        const bool = (key: string): boolean => entry(contents, key, "Bool").Bool;
+        const addr = (key: string): string => entry(contents, key, "Address").Address;
+
+        const rawDepositMin = u64("bitcoin_deposit_minimum");
+        const rawWithdrawalMin = u64("bitcoin_withdrawal_minimum");
+        const bitcoinDepositMinimum =
+            rawDepositMin < DUST_RELAY_MIN_VALUE ? DUST_RELAY_MIN_VALUE : rawDepositMin;
+        const bitcoinWithdrawalMinimum =
+            rawWithdrawalMin < DUST_RELAY_MIN_VALUE + 1n
+                ? DUST_RELAY_MIN_VALUE + 1n
+                : rawWithdrawalMin;
+
+        return {
+            paused: bool("paused"),
+            bitcoinChainId: addr("bitcoin_chain_id"),
+            bitcoinDepositMinimum,
+            bitcoinWithdrawalMinimum,
+            bitcoinConfirmationThreshold: u64("bitcoin_confirmation_threshold"),
+            withdrawalCancellationCooldownMs: u64("withdrawal_cancellation_cooldown_ms"),
+            depositMinimum: bitcoinDepositMinimum,
+            worstCaseNetworkFee: bitcoinWithdrawalMinimum - DUST_RELAY_MIN_VALUE,
+        };
+    }
+
     view = {
         /**
          * Fetches the MPC committee's threshold public key from on-chain.
@@ -264,30 +331,63 @@ export class HashiClient {
 
             return arkworksToSec1Compressed(mpcKey);
         },
-        // TODO: implement Governance-related view methods
-        bitcoinDepositMinimum: async (): Promise<bigint> => {
-            throw new Error("TODO");
+
+        /**
+         * Fetches all governance values in a single round-trip and returns a
+         * consistent snapshot. Prefer this over individual methods when you
+         * need 2+ values — it avoids redundant `Hashi.get` calls and gives
+         * you all fields from the same on-chain state.
+         */
+        all: async (): Promise<GovernanceConfig> => {
+            let result;
+            try {
+                result = await Hashi.get({
+                    client: this.#client,
+                    objectId: this.#hashiObjectId,
+                });
+            } catch (cause) {
+                throw new HashiFetchError(
+                    `Failed to fetch Hashi shared object ${this.#hashiObjectId}.`,
+                    this.#hashiObjectId,
+                    { cause },
+                );
+            }
+            const contents = result.json?.config?.config?.contents;
+            if (!Array.isArray(contents)) {
+                throw new HashiFetchError(
+                    `Hashi object ${this.#hashiObjectId} returned an unexpected shape: config.config.contents is not an array.`,
+                    this.#hashiObjectId,
+                );
+            }
+            return this.#parseConfig(contents);
         },
-        bitcoinWithdrawalMinimum: async (): Promise<bigint> => {
-            throw new Error("TODO");
-        },
-        bitcoinConfirmationThreshold: async (): Promise<bigint> => {
-            throw new Error("TODO");
-        },
-        paused: async (): Promise<boolean> => {
-            throw new Error("TODO");
-        },
-        withdrawalCancellationCooldownMs: async (): Promise<bigint> => {
-            throw new Error("TODO");
-        },
-        bitcoinChainId: async (): Promise<string> => {
-            throw new Error("TODO");
-        },
-        depositMinimum: async (): Promise<bigint> => {
-            throw new Error("TODO");
-        },
-        worstCaseNetworkFee: async (): Promise<bigint> => {
-            throw new Error("TODO");
-        },
+
+        paused: async (): Promise<boolean> => (await this.view.all()).paused,
+
+        /** Floored to `DUST_RELAY_MIN_VALUE` if the on-chain value is lower. */
+        bitcoinDepositMinimum: async (): Promise<bigint> =>
+            (await this.view.all()).bitcoinDepositMinimum,
+
+        /** Floored to `DUST_RELAY_MIN_VALUE + 1` so `worstCaseNetworkFee` is always ≥ 1. */
+        bitcoinWithdrawalMinimum: async (): Promise<bigint> =>
+            (await this.view.all()).bitcoinWithdrawalMinimum,
+
+        bitcoinConfirmationThreshold: async (): Promise<bigint> =>
+            (await this.view.all()).bitcoinConfirmationThreshold,
+
+        withdrawalCancellationCooldownMs: async (): Promise<bigint> =>
+            (await this.view.all()).withdrawalCancellationCooldownMs,
+
+        bitcoinChainId: async (): Promise<string> => (await this.view.all()).bitcoinChainId,
+
+        /** Alias of `bitcoinDepositMinimum`. */
+        depositMinimum: async (): Promise<bigint> => (await this.view.all()).depositMinimum,
+
+        /**
+         * Worst-case Bitcoin miner fee (sats) deducted from a withdrawal.
+         * Derived as `bitcoinWithdrawalMinimum - DUST_RELAY_MIN_VALUE`; always ≥ 1.
+         */
+        worstCaseNetworkFee: async (): Promise<bigint> =>
+            (await this.view.all()).worstCaseNetworkFee,
     };
 }

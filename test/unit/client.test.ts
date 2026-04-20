@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { HashiClient, hashi } from "../../src/client.js";
+import { HashiConfigError } from "../../src/errors.js";
 import { Hashi } from "../../src/contracts/hashi/hashi.js";
 import { generateDepositAddress, arkworksToSec1Compressed } from "../../src/bitcoin.js";
 import { SuiGrpcClient } from "@mysten/sui/grpc";
@@ -41,6 +42,7 @@ describe("HashiClient", () => {
     let client: SuiGrpcClient & { hashi: HashiClient };
 
     beforeEach(() => {
+        vi.clearAllMocks();
         client = new SuiGrpcClient({
             network: "devnet",
             baseUrl: "https://fullnode.devnet.sui.io:443",
@@ -287,14 +289,144 @@ describe("HashiClient", () => {
             });
         });
 
-        it.todo("bitcoinDepositMinimum");
-        it.todo("bitcoinWithdrawalMinimum");
-        it.todo("bitcoinConfirmationThreshold");
-        it.todo("paused");
-        it.todo("withdrawalCancellationCooldownMs");
-        it.todo("bitcoinChainId");
-        it.todo("depositMinimum");
-        it.todo("worstCaseNetworkFee");
+        describe("all / governance getters", () => {
+            /**
+             * Build a mocked Hashi.get() response with a custom config contents
+             * array. All other fields carry minimal-but-valid placeholders so
+             * the BCS-decoded json shape matches what the SDK expects.
+             */
+            function mockHashiWithConfig(
+                contents: Array<{
+                    key: string;
+                    value: { $kind: string; [k: string]: unknown };
+                }>,
+            ) {
+                vi.spyOn(Hashi, "get").mockResolvedValueOnce({
+                    json: {
+                        id: HASHI_OBJECT_ID,
+                        committee_set: {
+                            members: HASHI_OBJECT_ID,
+                            epoch: 0n,
+                            committees: HASHI_OBJECT_ID,
+                            pending_epoch_change: null,
+                            mpc_public_key: [],
+                        },
+                        config: {
+                            config: { contents },
+                            enabled_versions: { contents: [] },
+                            upgrade_cap: null,
+                        },
+                        treasury: { objects: HASHI_OBJECT_ID },
+                        proposals: HASHI_OBJECT_ID,
+                        tob: HASHI_OBJECT_ID,
+                        num_consumed_presigs: 0n,
+                    },
+                } as never);
+            }
+
+            const wellFormedContents = [
+                { key: "paused", value: { $kind: "Bool", Bool: false } },
+                {
+                    key: "bitcoin_chain_id",
+                    value: { $kind: "Address", Address: `0x${"a".repeat(64)}` },
+                },
+                { key: "bitcoin_deposit_minimum", value: { $kind: "U64", U64: "30000" } },
+                { key: "bitcoin_withdrawal_minimum", value: { $kind: "U64", U64: "30000" } },
+                { key: "bitcoin_confirmation_threshold", value: { $kind: "U64", U64: "6" } },
+                {
+                    key: "withdrawal_cancellation_cooldown_ms",
+                    value: { $kind: "U64", U64: "3600000" },
+                },
+            ];
+
+            it("all() returns a full typed snapshot from one Hashi.get call", async () => {
+                const getSpy = vi.spyOn(Hashi, "get");
+                mockHashiWithConfig(wellFormedContents);
+
+                const snap = await client.hashi.view.all();
+
+                expect(getSpy).toHaveBeenCalledTimes(1);
+                expect(snap).toEqual({
+                    paused: false,
+                    bitcoinChainId: `0x${"a".repeat(64)}`,
+                    bitcoinDepositMinimum: 30_000n,
+                    bitcoinWithdrawalMinimum: 30_000n,
+                    bitcoinConfirmationThreshold: 6n,
+                    withdrawalCancellationCooldownMs: 3_600_000n,
+                    depositMinimum: 30_000n,
+                    worstCaseNetworkFee: 30_000n - 546n,
+                });
+            });
+
+            it("floors bitcoin_deposit_minimum to DUST_RELAY_MIN_VALUE (546)", async () => {
+                mockHashiWithConfig([
+                    ...wellFormedContents.filter((e) => e.key !== "bitcoin_deposit_minimum"),
+                    { key: "bitcoin_deposit_minimum", value: { $kind: "U64", U64: "100" } },
+                ]);
+
+                const snap = await client.hashi.view.all();
+
+                expect(snap.bitcoinDepositMinimum).toBe(546n);
+                expect(snap.depositMinimum).toBe(546n);
+            });
+
+            it("floors bitcoin_withdrawal_minimum to DUST_RELAY_MIN_VALUE + 1 (547)", async () => {
+                mockHashiWithConfig([
+                    ...wellFormedContents.filter((e) => e.key !== "bitcoin_withdrawal_minimum"),
+                    { key: "bitcoin_withdrawal_minimum", value: { $kind: "U64", U64: "200" } },
+                ]);
+
+                const snap = await client.hashi.view.all();
+
+                expect(snap.bitcoinWithdrawalMinimum).toBe(547n);
+                expect(snap.worstCaseNetworkFee).toBe(1n); // 547 - 546
+            });
+
+            it("throws HashiConfigError naming the missing key", async () => {
+                mockHashiWithConfig(wellFormedContents.filter((e) => e.key !== "paused"));
+
+                await expect(client.hashi.view.all()).rejects.toMatchObject({
+                    name: "HashiConfigError",
+                    key: "paused",
+                    expectedVariant: "Bool",
+                    message: expect.stringContaining('"paused" not found'),
+                });
+            });
+
+            it("throws HashiConfigError when variant is wrong", async () => {
+                mockHashiWithConfig([
+                    ...wellFormedContents.filter((e) => e.key !== "paused"),
+                    { key: "paused", value: { $kind: "U64", U64: "1" } },
+                ]);
+
+                await expect(client.hashi.view.all()).rejects.toMatchObject({
+                    name: "HashiConfigError",
+                    key: "paused",
+                    expectedVariant: "Bool",
+                    actualVariant: "U64",
+                });
+            });
+
+            it("each individual view method fetches via all() (one Hashi.get per call)", async () => {
+                const getSpy = vi.spyOn(Hashi, "get");
+                mockHashiWithConfig(wellFormedContents);
+
+                expect(await client.hashi.view.paused()).toBe(false);
+                expect(getSpy).toHaveBeenCalledTimes(1);
+            });
+
+            it("HashiConfigError is instanceof Error and carries structured fields", async () => {
+                mockHashiWithConfig(wellFormedContents.filter((e) => e.key !== "paused"));
+
+                try {
+                    await client.hashi.view.all();
+                    expect.fail("should have thrown");
+                } catch (err) {
+                    expect(err).toBeInstanceOf(Error);
+                    expect(err).toBeInstanceOf(HashiConfigError);
+                }
+            });
+        });
     });
 
     describe("tx", () => {

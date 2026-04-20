@@ -5,7 +5,8 @@
     "main": "index.js",
     "scripts": {
         "start": "node index.js",
-        "test": "vitest",
+        "test": "vitest --project=unit",
+        "test:integration": "vitest --project=integration",
         "codegen": "sui-ts-codegen generate",
         "format": "prettier --write \"**/*.{ts,json,md}\" \"!hashi/**\""
     },

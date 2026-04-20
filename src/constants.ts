@@ -19,6 +19,14 @@ export const NUMS_KEY = new Uint8Array([
     0x47, 0xbf, 0xee, 0x9a, 0xce, 0x80, 0x3a, 0xc0,
 ]);
 
+/**
+ * The Move side uses this as a floor on `bitcoin_deposit_minimum` and
+ * `bitcoin_withdrawal_minimum`; the SDK replicates the same floors so `view.*`
+ * matches on-chain semantics. Mirrors `DUST_RELAY_MIN_VALUE` in
+ * `hashi::btc_config`.
+ */
+export const DUST_RELAY_MIN_VALUE = 546n;
+
 export const NETWORK_CONFIG: Partial<Record<SuiNetwork, NetworkConfig>> = {
     devnet: {
         hashiObjectId: "0xb66946635b771effce95de644244d6074e8eb005eef9df34d1a7bffda95f32ac",
