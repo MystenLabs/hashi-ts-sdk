@@ -5,77 +5,56 @@ import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
 import { hashi } from "../../src/client.js";
 
 /**
- * Real-network deposit smoke test — BTC signet funding + Sui devnet submission.
+ * Real-network deposit smoke test — Sui devnet submission against an
+ * already-funded signet UTXO.
  *
- * Gated by `HASHI_E2E_SUI_PRIVATE_KEY` (a suiprivkey1…-encoded Ed25519 key)
- * so `pnpm test:integration` stays green in CI when the secret isn't set. To
- * run locally:
+ * UTXO details are supplied via env vars so the test has no live
+ * mempool.space dependency. To run locally:
  *
  *   1. Derive the BTC deposit address for your Sui address and fund it on
- *      signet via https://signetfaucet.com/.
- *   2. Wait for the tx to confirm (≈10 min per signet block).
- *   3. `HASHI_E2E_SUI_PRIVATE_KEY=suiprivkey1… pnpm test:integration`
+ *      signet. Wait for the tx to confirm (≈10 min per block).
+ *   2. Populate `.env` at the project root:
+ *        HASHI_E2E_SUI_PRIVATE_KEY=suiprivkey1…
+ *        HASHI_E2E_BTC_TXID=<64-char hex, no 0x prefix>
+ *        HASHI_E2E_BTC_VOUT=<integer>
+ *        HASHI_E2E_BTC_AMOUNT_SATS=<integer>
+ *   3. `pnpm test:integration`
  *
  * The test stops at `DepositRequestedEvent`. The committee-driven
  * `DepositConfirmedEvent` can take 1+ hour after 6 signet confirmations and
  * is out of scope here — waiting for it belongs to a future `waitForDeposit`
  * helper.
  */
-// Fail loudly at module load if the env var is missing — otherwise vitest
-// reports "0 failed" and exits 0 (it.skip ran, test file was considered
-// successful), which previously masked a .env that wasn't being picked up.
+// Fail loudly at module load if any env var is missing — otherwise vitest
+// reports "0 failed" and exits 0, which previously masked a .env that wasn't
+// being picked up.
 const TEST_PK = process.env.HASHI_E2E_SUI_PRIVATE_KEY;
-if (!TEST_PK) {
+const TEST_TXID = process.env.HASHI_E2E_BTC_TXID;
+const TEST_VOUT = process.env.HASHI_E2E_BTC_VOUT;
+const TEST_AMOUNT_SATS = process.env.HASHI_E2E_BTC_AMOUNT_SATS;
+if (!TEST_PK || !TEST_TXID || !TEST_VOUT || !TEST_AMOUNT_SATS) {
     throw new Error(
-        "HASHI_E2E_SUI_PRIVATE_KEY is not set. Add it to a `.env` file at the " +
-            "project root (e.g. `HASHI_E2E_SUI_PRIVATE_KEY=suiprivkey1...`) or " +
-            "export it in your shell before running `pnpm test:integration`.",
+        "Set HASHI_E2E_SUI_PRIVATE_KEY, HASHI_E2E_BTC_TXID, HASHI_E2E_BTC_VOUT, " +
+            "and HASHI_E2E_BTC_AMOUNT_SATS in `.env` at the project root (or " +
+            "export them) before running `pnpm test:integration`.",
     );
 }
 
 describe("HashiClient.deposit (signet + devnet, real network)", () => {
-    it("submits a real deposit for an existing signet UTXO and emits DepositRequestedEvent", async () => {
-        const kp = Ed25519Keypair.fromSecretKey(decodeSuiPrivateKey(TEST_PK).secretKey);
-        const recipient = kp.toSuiAddress();
+    it("submits a real deposit for the configured signet UTXO and emits DepositRequestedEvent", async () => {
+        const signer = Ed25519Keypair.fromSecretKey(decodeSuiPrivateKey(TEST_PK).secretKey);
+        const recipient = signer.toSuiAddress();
 
         const client = new SuiGrpcClient({
             network: "devnet",
             baseUrl: "https://fullnode.devnet.sui.io:443",
         }).$extend(hashi({ network: "devnet" }));
 
-        const btcAddress = await client.hashi.generateDepositAddress({
-            suiAddress: recipient,
-        });
-
-        const res = await fetch(`https://mempool.space/signet/api/address/${btcAddress}/utxo`);
-        if (!res.ok) {
-            throw new Error(
-                `mempool.space lookup failed for ${btcAddress}: ${res.status} ${res.statusText}`,
-            );
-        }
-        const utxos = (await res.json()) as Array<{
-            txid: string;
-            vout: number;
-            value: number;
-        }>;
-        if (utxos.length === 0) {
-            throw new Error(
-                `Signet address ${btcAddress} has no UTXOs. Top it up at ` +
-                    `https://signetfaucet.com/ and re-run.`,
-            );
-        }
-
-        const u = utxos[0];
-        const tx = await client.hashi.deposit({
-            txid: `0x${u.txid}`,
-            utxos: [{ vout: u.vout, amountSats: BigInt(u.value) }],
+        const result = await client.hashi.deposit({
+            signer,
+            txid: `0x${TEST_TXID}`,
+            utxos: [{ vout: Number(TEST_VOUT), amountSats: BigInt(TEST_AMOUNT_SATS) }],
             recipient,
-        });
-
-        const result = await client.signAndExecuteTransaction({
-            signer: kp,
-            transaction: tx,
-            include: { effects: true, events: true },
         });
 
         // Discriminated union — a failed execution lands under FailedTransaction.

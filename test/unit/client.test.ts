@@ -10,6 +10,7 @@ import { Hashi } from "../../src/contracts/hashi/hashi.js";
 import { generateDepositAddress } from "../../src/bitcoin.js";
 import { SuiGrpcClient } from "@mysten/sui/grpc";
 import { Transaction } from "@mysten/sui/transactions";
+import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { fromHex } from "@mysten/sui/utils";
 
@@ -228,6 +229,22 @@ describe("HashiClient", () => {
 
     describe("deposit", () => {
         const validTxid = "0x" + "ef".repeat(32);
+        const testSigner = Ed25519Keypair.generate();
+
+        // Stub the network call so happy-path tests don't hit a real node.
+        // Spy on `client.core` (the raw CoreClient instance) rather than
+        // `client` itself — `$extend` wraps the client in a Proxy that caches
+        // bound method references, so a spy installed on the Proxy gets
+        // shadowed by the cache on subsequent reads. The underlying target is
+        // reachable via `client.core` since `CoreClient` sets `core = this`,
+        // and `HashiClient` stores that same target internally.
+        let signExecSpy: ReturnType<typeof vi.spyOn>;
+        beforeEach(() => {
+            signExecSpy = vi.spyOn(client.core, "signAndExecuteTransaction").mockResolvedValue({
+                $kind: "Transaction",
+                Transaction: { status: { success: true } },
+            } as never);
+        });
 
         it("throws HashiPausedError when the protocol is paused", async () => {
             mockHashiWithConfig([
@@ -236,6 +253,7 @@ describe("HashiClient", () => {
             ]);
 
             const promise = client.hashi.deposit({
+                signer: testSigner,
                 txid: validTxid,
                 utxos: [{ vout: 0, amountSats: 100_000n }],
                 recipient: TEST_SUI_ADDRESS,
@@ -243,6 +261,7 @@ describe("HashiClient", () => {
 
             await expect(promise).rejects.toBeInstanceOf(HashiPausedError);
             await expect(promise).rejects.toMatchObject({ operation: "deposit" });
+            expect(signExecSpy).not.toHaveBeenCalled();
         });
 
         it("prefers HashiPausedError over AmountBelowMinimumError when both would apply", async () => {
@@ -256,6 +275,7 @@ describe("HashiClient", () => {
 
             await expect(
                 client.hashi.deposit({
+                    signer: testSigner,
                     txid: validTxid,
                     utxos: [{ vout: 0, amountSats: 1n }], // well below 30 000
                     recipient: TEST_SUI_ADDRESS,
@@ -268,6 +288,7 @@ describe("HashiClient", () => {
             mockHashiWithConfig(WELL_FORMED_CONFIG);
 
             const promise = client.hashi.deposit({
+                signer: testSigner,
                 txid: validTxid,
                 utxos: [
                     { vout: 1, amountSats: 10_000n },
@@ -284,22 +305,25 @@ describe("HashiClient", () => {
                     { amount: 20_000n, minimum: 30_000n, vout: 7 },
                 ],
             });
+            expect(signExecSpy).not.toHaveBeenCalled();
         });
 
         it("accepts a UTXO at exactly the minimum (boundary = pass)", async () => {
             mockHashiWithConfig(WELL_FORMED_CONFIG);
-            const tx = await client.hashi.deposit({
+            await client.hashi.deposit({
+                signer: testSigner,
                 txid: validTxid,
                 utxos: [{ vout: 0, amountSats: 30_000n }],
                 recipient: TEST_SUI_ADDRESS,
             });
-            expect(tx).toBeInstanceOf(Transaction);
+            expect(signExecSpy).toHaveBeenCalledTimes(1);
         });
 
         it("rejects a UTXO one sat below the minimum (boundary = fail)", async () => {
             mockHashiWithConfig(WELL_FORMED_CONFIG);
             await expect(
                 client.hashi.deposit({
+                    signer: testSigner,
                     txid: validTxid,
                     utxos: [{ vout: 0, amountSats: 29_999n }],
                     recipient: TEST_SUI_ADDRESS,
@@ -307,10 +331,13 @@ describe("HashiClient", () => {
             ).rejects.toBeInstanceOf(AmountBelowMinimumError);
         });
 
-        it("builds a batched PTB when all UTXOs meet the minimum", async () => {
+        it("forwards the built PTB and the provided signer to signAndExecuteTransaction", async () => {
+            // PTB shape is exhaustively covered by `tx.deposit` tests; here we
+            // just verify the surface method hands off correctly.
             mockHashiWithConfig(WELL_FORMED_CONFIG);
 
-            const tx = await client.hashi.deposit({
+            await client.hashi.deposit({
+                signer: testSigner,
                 txid: validTxid,
                 utxos: [
                     { vout: 0, amountSats: 100_000n },
@@ -319,17 +346,14 @@ describe("HashiClient", () => {
                 recipient: TEST_SUI_ADDRESS,
             });
 
-            expect(tx).toBeInstanceOf(Transaction);
-            const { commands } = tx.getData();
-            expect(commands).toHaveLength(6);
-            expect(commands.map((c) => c.MoveCall?.function)).toEqual([
-                "utxo_id",
-                "utxo",
-                "deposit",
-                "utxo_id",
-                "utxo",
-                "deposit",
-            ]);
+            expect(signExecSpy).toHaveBeenCalledTimes(1);
+            const call = signExecSpy.mock.calls[0][0] as {
+                signer: unknown;
+                transaction: Transaction;
+            };
+            expect(call.signer).toBe(testSigner);
+            expect(call.transaction).toBeInstanceOf(Transaction);
+            expect(call.transaction.getData().commands).toHaveLength(6);
         });
 
         it("fetches the governance snapshot exactly once per deposit call", async () => {
@@ -337,6 +361,7 @@ describe("HashiClient", () => {
             mockHashiWithConfig(WELL_FORMED_CONFIG);
 
             await client.hashi.deposit({
+                signer: testSigner,
                 txid: validTxid,
                 utxos: [{ vout: 0, amountSats: 100_000n }],
                 recipient: TEST_SUI_ADDRESS,
@@ -350,17 +375,20 @@ describe("HashiClient", () => {
                 const getSpy = vi.spyOn(Hashi, "get");
                 await expect(
                     client.hashi.deposit({
+                        signer: testSigner,
                         txid: "0xabc", // too short
                         utxos: [{ vout: 0, amountSats: 100_000n }],
                         recipient: TEST_SUI_ADDRESS,
                     }),
                 ).rejects.toBeInstanceOf(InvalidDepositParamsError);
                 expect(getSpy).not.toHaveBeenCalled();
+                expect(signExecSpy).not.toHaveBeenCalled();
             });
 
             it("rejects a malformed recipient", async () => {
                 await expect(
                     client.hashi.deposit({
+                        signer: testSigner,
                         txid: validTxid,
                         utxos: [{ vout: 0, amountSats: 100_000n }],
                         recipient: "not-a-sui-address",
@@ -371,6 +399,7 @@ describe("HashiClient", () => {
             it("rejects an empty utxos array", async () => {
                 await expect(
                     client.hashi.deposit({
+                        signer: testSigner,
                         txid: validTxid,
                         utxos: [],
                         recipient: TEST_SUI_ADDRESS,
@@ -384,6 +413,7 @@ describe("HashiClient", () => {
             it("rejects duplicate vouts within a single deposit", async () => {
                 await expect(
                     client.hashi.deposit({
+                        signer: testSigner,
                         txid: validTxid,
                         utxos: [
                             { vout: 0, amountSats: 100_000n },
@@ -400,6 +430,7 @@ describe("HashiClient", () => {
             it("rejects a non-integer vout", async () => {
                 await expect(
                     client.hashi.deposit({
+                        signer: testSigner,
                         txid: validTxid,
                         utxos: [{ vout: 1.5, amountSats: 100_000n }],
                         recipient: TEST_SUI_ADDRESS,
@@ -410,6 +441,7 @@ describe("HashiClient", () => {
             it("rejects a negative vout", async () => {
                 await expect(
                     client.hashi.deposit({
+                        signer: testSigner,
                         txid: validTxid,
                         utxos: [{ vout: -1, amountSats: 100_000n }],
                         recipient: TEST_SUI_ADDRESS,

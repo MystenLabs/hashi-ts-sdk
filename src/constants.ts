@@ -29,8 +29,8 @@ export const DUST_RELAY_MIN_VALUE = 546n;
 
 export const NETWORK_CONFIG: Partial<Record<SuiNetwork, NetworkConfig>> = {
     devnet: {
-        hashiObjectId: "0xb66946635b771effce95de644244d6074e8eb005eef9df34d1a7bffda95f32ac",
-        packageId: "0xd53f9cf254ff2fc72259873137f86a582f657b86cc598f8cef9b178ab38f2777",
+        hashiObjectId: "0x7441ea9e60bdc268d9a596ccf5a8e98e0cfc80c1160215f30e0defada1accceb",
+        packageId: "0x06a9ebd779c4da547805f3f226c41674662bf5545f2c027c1b44898e438e69a3",
         bitcoinNetwork: "signet",
     },
 };

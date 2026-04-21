@@ -1,4 +1,5 @@
 import type { ClientWithCoreApi } from "@mysten/sui/client";
+import type { Signer } from "@mysten/sui/cryptography";
 import { fromHex } from "@mysten/sui/utils";
 import { Transaction, coinWithBalance } from "@mysten/sui/transactions";
 import { Hashi } from "./contracts/hashi/hashi.js";
@@ -49,14 +50,14 @@ export function hashi<const Name = "hashi">({
  *
  * ```ts
  * const client = new SuiGrpcClient({ ... }).$extend(hashi({ network: "devnet" }));
- * await client.hashi.deposit({ ... });
+ * const result = await client.hashi.deposit({ signer, ... });
  * ```
  *
- * **The SDK never signs or submits transactions.** All `tx.*` builders and
- * higher-level direct methods (`deposit`, `withdraw`) return unsigned
- * `Transaction` objects — the caller signs and submits via
- * `signAndExecuteTransaction` (or an equivalent flow). This keeps signer
- * ergonomics (wallets, sponsors, hardware) decoupled from SDK logic.
+ * **Direct methods (`deposit`, `withdraw`) sign and execute transactions** on
+ * behalf of the caller — pass a `Signer` and receive the execution result.
+ * For composable flows (bundling into a larger PTB, sponsored transactions,
+ * dry-run/simulation), use the `tx.*` builders instead; they return unsigned
+ * `Transaction` objects and leave signing to the caller.
  */
 export class HashiClient {
     #client: ClientWithCoreApi;
@@ -120,9 +121,12 @@ export class HashiClient {
 
     /**
      * Submit one or more Bitcoin deposits for committee confirmation, batched
-     * into a single Sui PTB. Returns an unsigned `Transaction`.
+     * into a single Sui PTB. Signs with `signer` and submits, returning the
+     * execution result (`$kind: "Transaction" | "FailedTransaction"`). The
+     * result includes `effects` and `events` so callers can confirm
+     * `DepositRequestedEvent` without an extra round-trip.
      *
-     * The method runs three preflight stages before returning:
+     * The method runs three preflight stages before signing:
      *
      *   1. **Structural validation** — `txid` and `recipient` must be
      *      0x-prefixed 32-byte hex; `utxos` must be non-empty; every `vout`
@@ -140,8 +144,18 @@ export class HashiClient {
      * snapshot, so validation is internally consistent. Chain state can still
      * drift between the snapshot and execution — the Move side re-asserts
      * both invariants, so a genuine race simply aborts the tx.
+     *
+     * For composable flows (sponsored tx, dry-run, or bundling into a larger
+     * PTB), use `tx.deposit(params)` instead — it returns the unsigned
+     * `Transaction` and leaves signing to the caller.
      */
-    async deposit(params: DepositParams): Promise<Transaction> {
+    async deposit({
+        signer,
+        ...params
+    }: DepositParams & {
+        /** Signs and pays for the resulting transaction. The signer's address becomes the tx sender. */
+        signer: Signer;
+    }) {
         this.#validateDepositParams(params);
 
         const snap = await this.view.all();
@@ -163,7 +177,12 @@ export class HashiClient {
             throw new AmountBelowMinimumError({ violations });
         }
 
-        return this.tx.deposit(params);
+        const transaction = this.tx.deposit(params);
+        return this.#client.core.signAndExecuteTransaction({
+            signer,
+            transaction,
+            include: { effects: true, events: true },
+        });
     }
     async withdraw() {}
 
