@@ -84,9 +84,9 @@ export interface AmountViolation {
 /**
  * Thrown by `HashiClient.deposit()` when one or more UTXOs are below the live
  * on-chain deposit minimum. Carries every offending UTXO so callers can fix
- * all violations in one round-trip rather than retrying N times. Raised
- * before any PTB is built — mirrors the Move-side `EBelowMinimumDeposit`
- * abort in `deposit::deposit`.
+ * all violations in one round-trip rather than retrying N times. Raised after
+ * the governance snapshot is fetched but before any PTB is built — mirrors
+ * the Move-side `EBelowMinimumDeposit` abort in `deposit::deposit`.
  */
 export class AmountBelowMinimumError extends Error {
     readonly violations: readonly AmountViolation[];

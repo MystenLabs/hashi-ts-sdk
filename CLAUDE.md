@@ -5,8 +5,12 @@ TypeScript SDK for interacting with the Hashi Sui Move smart contracts.
 ## Structure
 
 - `src/` — SDK source code (TypeScript)
-  - `client.ts` — `HashiClient` class (via `$extend` pattern), exposes `generateDepositAddress`, `view.*`, `tx.*`, `call.*`
+  - `client.ts` — `HashiClient` class (via `$extend` pattern); direct methods (`deposit` — signs + executes), plus `generateDepositAddress`, `view.*`, `tx.*`, `call.*`
   - `bitcoin.ts` — Bitcoin address derivation: key derivation (HKDF-SHA3-256 over secp256k1) and taproot address construction (P2TR script-path)
+  - `constants.ts` — `NETWORK_CONFIG` (Hashi object/package ids and default BTC network per Sui network)
+  - `errors.ts` — typed SDK errors (`HashiConfigError`, `HashiFetchError`, `HashiPausedError`, `AmountBelowMinimumError`, `InvalidDepositParamsError`)
+  - `types.ts` — public types (`DepositParams`, `UtxoOutput`, `GovernanceConfig`, network/option shapes)
+  - `util.ts` — internal helpers (`assertHex32` hex validation, `entry` for VecMap decoding)
   - `index.ts` — public exports
   - `contracts/` — auto-generated Move bindings (`@mysten/codegen`); do not edit
 - `test/` — unit and integration tests (vitest)

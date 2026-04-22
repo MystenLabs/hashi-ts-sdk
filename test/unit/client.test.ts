@@ -394,6 +394,7 @@ describe("HashiClient", () => {
                         recipient: "not-a-sui-address",
                     }),
                 ).rejects.toBeInstanceOf(InvalidDepositParamsError);
+                expect(signExecSpy).not.toHaveBeenCalled();
             });
 
             it("rejects an empty utxos array", async () => {
@@ -408,6 +409,7 @@ describe("HashiClient", () => {
                     name: "InvalidDepositParamsError",
                     reason: expect.stringContaining("at least one UTXO"),
                 });
+                expect(signExecSpy).not.toHaveBeenCalled();
             });
 
             it("rejects duplicate vouts within a single deposit", async () => {
@@ -425,6 +427,7 @@ describe("HashiClient", () => {
                     name: "InvalidDepositParamsError",
                     reason: expect.stringContaining("duplicate `vout`"),
                 });
+                expect(signExecSpy).not.toHaveBeenCalled();
             });
 
             it("rejects a non-integer vout", async () => {
@@ -436,6 +439,7 @@ describe("HashiClient", () => {
                         recipient: TEST_SUI_ADDRESS,
                     }),
                 ).rejects.toBeInstanceOf(InvalidDepositParamsError);
+                expect(signExecSpy).not.toHaveBeenCalled();
             });
 
             it("rejects a negative vout", async () => {
@@ -447,6 +451,7 @@ describe("HashiClient", () => {
                         recipient: TEST_SUI_ADDRESS,
                     }),
                 ).rejects.toBeInstanceOf(InvalidDepositParamsError);
+                expect(signExecSpy).not.toHaveBeenCalled();
             });
         });
     });
