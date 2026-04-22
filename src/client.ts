@@ -1,8 +1,8 @@
 import type { ClientWithCoreApi } from "@mysten/sui/client";
+import type { Signer } from "@mysten/sui/cryptography";
 import { fromHex } from "@mysten/sui/utils";
 import { Transaction, coinWithBalance } from "@mysten/sui/transactions";
 import { Hashi } from "./contracts/hashi/hashi.js";
-import { Value } from "./contracts/hashi/config_value.js";
 import * as depositModule from "./contracts/hashi/deposit.js";
 import * as withdrawModule from "./contracts/hashi/withdraw.js";
 import * as utxoModule from "./contracts/hashi/utxo.js";
@@ -12,30 +12,25 @@ import {
     arkworksToSec1Compressed,
 } from "./bitcoin.js";
 import { DUST_RELAY_MIN_VALUE, NETWORK_CONFIG } from "./constants.js";
-import { HashiConfigError, HashiFetchError } from "./errors.js";
-import type { BitcoinNetwork, GovernanceConfig, HashiClientOptions, SuiNetwork } from "./types.js";
+import type { AmountViolation } from "./errors.js";
+import {
+    AmountBelowMinimumError,
+    HashiConfigError,
+    HashiFetchError,
+    HashiPausedError,
+    InvalidDepositParamsError,
+} from "./errors.js";
+import type {
+    BitcoinNetwork,
+    DepositParams,
+    GovernanceConfig,
+    HashiClientOptions,
+    SuiNetwork,
+} from "./types.js";
+import { assertHex32, entry, type ConfigEntry } from "./util.js";
 
-type ConfigValue = typeof Value.$inferType;
-type ConfigEntry = { key: string; value: ConfigValue };
-
-/**
- * Find a VecMap entry by key and narrow its `Value` variant. Discriminating
- * on `$kind` lets TypeScript narrow the returned payload — callers get the
- * variant-specific fields (e.g. `.U64: string`, `.Bool: boolean`) without
- * any manual type assertions.
- */
-function entry<K extends ConfigValue["$kind"]>(
-    contents: readonly ConfigEntry[],
-    key: string,
-    expectedVariant: K,
-): Extract<ConfigValue, { $kind: K }> {
-    const e = contents.find((c) => c.key === key);
-    if (!e) throw HashiConfigError.missing(key, expectedVariant);
-    if (e.value.$kind !== expectedVariant) {
-        throw HashiConfigError.wrongVariant(key, expectedVariant, e.value.$kind);
-    }
-    return e.value as Extract<ConfigValue, { $kind: K }>;
-}
+/** Max value of an unsigned 32-bit integer; vout is a u32 on the Bitcoin side. */
+const U32_MAX = 0xffffffff;
 
 export function hashi<const Name = "hashi">({
     name = "hashi" as Name,
@@ -49,6 +44,21 @@ export function hashi<const Name = "hashi">({
     };
 }
 
+/**
+ * User-facing SDK client for the Hashi protocol. Constructed via the
+ * `hashi({...})` factory and attached to any Sui client via `$extend`:
+ *
+ * ```ts
+ * const client = new SuiGrpcClient({ ... }).$extend(hashi({ network: "devnet" }));
+ * const result = await client.hashi.deposit({ signer, ... });
+ * ```
+ *
+ * **Direct methods (`deposit`, `withdraw`) sign and execute transactions** on
+ * behalf of the caller — pass a `Signer` and receive the execution result.
+ * For composable flows (bundling into a larger PTB, sponsored transactions,
+ * dry-run/simulation), use the `tx.*` builders instead; they return unsigned
+ * `Transaction` objects and leave signing to the caller.
+ */
 export class HashiClient {
     #client: ClientWithCoreApi;
     #hashiObjectId: string;
@@ -109,51 +119,161 @@ export class HashiClient {
         return generateDepositAddressRaw(mpcKey, addressBytes, bitcoinNetwork);
     }
 
-    async deposit() {}
+    /**
+     * Submit one or more Bitcoin deposits for committee confirmation, batched
+     * into a single Sui PTB. Signs with `signer` and submits, returning the
+     * execution result (`$kind: "Transaction" | "FailedTransaction"`). The
+     * result includes `effects` and `events` so callers can confirm
+     * `DepositRequestedEvent` without an extra round-trip.
+     *
+     * The method runs three preflight stages before signing:
+     *
+     *   1. **Structural validation** — `txid` and `recipient` must be
+     *      0x-prefixed 32-byte hex; `utxos` must be non-empty; every `vout`
+     *      must be a non-negative u32 and unique within the call. Violations
+     *      throw `InvalidDepositParamsError` without any chain read.
+     *   2. **Pause check** — reads the governance snapshot via `view.all()`
+     *      and throws `HashiPausedError` if `paused` is `true`. Mirrors the
+     *      Move-side `hashi::assert_unpaused`.
+     *   3. **Minimum check** — every UTXO must have `amountSats ≥
+     *      snap.bitcoinDepositMinimum`. All offenders are collected into one
+     *      `AmountBelowMinimumError`, so callers can fix the batch in one
+     *      round-trip. Mirrors `EBelowMinimumDeposit` in `deposit::deposit`.
+     *
+     * Both chain-reading checks (2, 3) read from the same `view.all()`
+     * snapshot, so validation is internally consistent. Chain state can still
+     * drift between the snapshot and execution — the Move side re-asserts
+     * both invariants, so a genuine race simply aborts the tx.
+     *
+     * For composable flows (sponsored tx, dry-run, or bundling into a larger
+     * PTB), use `tx.deposit(params)` instead — it returns the unsigned
+     * `Transaction` and leaves signing to the caller.
+     */
+    async deposit({
+        signer,
+        ...params
+    }: DepositParams & {
+        /** Signs and pays for the resulting transaction. The signer's address becomes the tx sender. */
+        signer: Signer;
+    }) {
+        this.#validateDepositParams(params);
+
+        const snap = await this.view.all();
+        if (snap.paused) {
+            throw new HashiPausedError({ operation: "deposit" });
+        }
+
+        const violations: AmountViolation[] = [];
+        for (const { vout, amountSats } of params.utxos) {
+            if (amountSats < snap.bitcoinDepositMinimum) {
+                violations.push({
+                    amount: amountSats,
+                    minimum: snap.bitcoinDepositMinimum,
+                    vout,
+                });
+            }
+        }
+        if (violations.length > 0) {
+            throw new AmountBelowMinimumError({ violations });
+        }
+
+        const transaction = this.tx.deposit(params);
+        return this.#client.core.signAndExecuteTransaction({
+            signer,
+            transaction,
+            include: { effects: true, events: true },
+        });
+    }
     async withdraw() {}
+
+    #validateDepositParams(params: DepositParams): void {
+        assertHex32(params.txid, "txid");
+        assertHex32(params.recipient, "recipient");
+        if (params.utxos.length === 0) {
+            throw new InvalidDepositParamsError({
+                reason: "`utxos` must contain at least one UTXO",
+            });
+        }
+        const seen = new Set<number>();
+        for (const { vout } of params.utxos) {
+            if (!Number.isInteger(vout) || vout < 0 || vout > U32_MAX) {
+                throw new InvalidDepositParamsError({
+                    reason: "`vout` must be a non-negative u32 integer",
+                    detail: `got ${JSON.stringify(vout)}`,
+                });
+            }
+            if (seen.has(vout)) {
+                throw new InvalidDepositParamsError({
+                    reason: "duplicate `vout` within a single deposit",
+                    detail: `vout ${vout} appears more than once (each output of a single txid must be unique)`,
+                });
+            }
+            seen.add(vout);
+        }
+    }
 
     // User-facing transaction builders — compose `call.*` thunks into a full
     // PTB and return the unsigned `Transaction`. Execution (sign + dry-run +
     // submit) is the direct-method layer's concern and happens elsewhere.
     tx = {
         /**
-         * Build a transaction that submits a Bitcoin deposit for committee
-         * confirmation. Composes `utxo::utxo_id` → `utxo::utxo` → `deposit::deposit`
-         * in a single PTB so the `Utxo` struct is constructed inline.
+         * Build a transaction that submits one or more Bitcoin deposits for
+         * committee confirmation, batched into a single Sui PTB.
+         *
+         * A single Bitcoin funding tx can pay the same deposit address on
+         * multiple outputs (e.g. change + donation, or a coinjoin). Rather
+         * than forcing the user to submit one Sui tx per output, this method
+         * accepts every qualifying output and emits a dedicated Move-call
+         * triple per UTXO:
+         *
+         *     utxo::utxo_id(txid, vout_i)   → UtxoId
+         *     utxo::utxo(utxoId, amount_i, derivationPath = recipient)  → Utxo
+         *     deposit::deposit(hashi, utxo)
+         *
+         * The triples are emitted in `params.utxos` order, so N UTXOs yield
+         * exactly `3 * N` PTB commands.
+         *
+         * Because all triples live in one PTB, execution is atomic: either
+         * every deposit is recorded, or none are (any abort — wrong minimum,
+         * replayed UTXO, paused system — reverts the whole transaction).
+         *
+         * All UTXOs share the `txid` because `DepositParams` has a single
+         * top-level `txid` field, and are credited to the same `recipient`.
+         *
+         * @example
+         * ```ts
+         * const tx = client.hashi.tx.deposit({
+         *   txid: `0x${btcTxid}`,
+         *   utxos: [
+         *     { vout: 0, amountSats: 100_000n },
+         *     { vout: 2, amountSats:  50_000n },
+         *   ],
+         *   recipient: signer.toSuiAddress(),
+         * });
+         * await client.signAndExecuteTransaction({ signer, transaction: tx });
+         * ```
          */
-        deposit: (options: {
-            /** 0x-prefixed 32-byte Bitcoin txid of the funding transaction. */
-            txid: string;
-            /** Output index (u32) within that Bitcoin transaction. */
-            vout: number;
-            /** Amount in sats (u64). Must be ≥ the on-chain deposit minimum. */
-            amount: bigint;
-            /**
-             * Sui address that should receive the minted BTC — goes into the
-             * deposit's `derivation_path` as `Some(addr)`. Typically the same
-             * address used to derive the Bitcoin deposit address via
-             * `generateDepositAddress`.
-             */
-            suiAddress: string;
-        }): Transaction => {
+        deposit: (params: DepositParams): Transaction => {
             const tx = new Transaction();
-            const utxoId = tx.add(
-                utxoModule.utxoId({
-                    package: this.#packageId,
-                    arguments: { txid: options.txid, vout: options.vout },
-                }),
-            );
-            const utxo = tx.add(
-                utxoModule.utxo({
-                    package: this.#packageId,
-                    arguments: {
-                        utxoId,
-                        amount: options.amount,
-                        derivationPath: options.suiAddress,
-                    },
-                }),
-            );
-            tx.add(this.call.deposit({ utxo }));
+            for (const { vout, amountSats } of params.utxos) {
+                const utxoId = tx.add(
+                    utxoModule.utxoId({
+                        package: this.#packageId,
+                        arguments: { txid: params.txid, vout },
+                    }),
+                );
+                const utxo = tx.add(
+                    utxoModule.utxo({
+                        package: this.#packageId,
+                        arguments: {
+                            utxoId,
+                            amount: amountSats,
+                            derivationPath: params.recipient,
+                        },
+                    }),
+                );
+                tx.add(this.call.deposit({ utxo }));
+            }
             return tx;
         },
 

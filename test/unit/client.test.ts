@@ -1,10 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { HashiClient, hashi } from "../../src/client.js";
-import { HashiConfigError } from "../../src/errors.js";
+import {
+    AmountBelowMinimumError,
+    HashiConfigError,
+    HashiPausedError,
+    InvalidDepositParamsError,
+} from "../../src/errors.js";
 import { Hashi } from "../../src/contracts/hashi/hashi.js";
-import { generateDepositAddress, arkworksToSec1Compressed } from "../../src/bitcoin.js";
+import { generateDepositAddress } from "../../src/bitcoin.js";
 import { SuiGrpcClient } from "@mysten/sui/grpc";
 import { Transaction } from "@mysten/sui/transactions";
+import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { fromHex } from "@mysten/sui/utils";
 
@@ -37,6 +43,46 @@ function sec1ToArkworks(sec1: Uint8Array): Uint8Array {
 const TEST_MPC_KEY_ARKWORKS = sec1ToArkworks(TEST_MPC_KEY);
 
 const TEST_SUI_ADDRESS = "0xabcdef0000000000000000000000000000000000000000000000000000000001";
+
+/**
+ * Build a mocked `Hashi.get()` response with a custom config `contents` array.
+ * Other fields carry minimal-but-valid placeholders so the BCS-decoded json
+ * shape matches what the SDK expects.
+ */
+function mockHashiWithConfig(
+    contents: Array<{ key: string; value: { $kind: string; [k: string]: unknown } }>,
+) {
+    vi.spyOn(Hashi, "get").mockResolvedValueOnce({
+        json: {
+            id: HASHI_OBJECT_ID,
+            committee_set: {
+                members: HASHI_OBJECT_ID,
+                epoch: 0n,
+                committees: HASHI_OBJECT_ID,
+                pending_epoch_change: null,
+                mpc_public_key: [],
+            },
+            config: {
+                config: { contents },
+                enabled_versions: { contents: [] },
+                upgrade_cap: null,
+            },
+            treasury: { objects: HASHI_OBJECT_ID },
+            proposals: HASHI_OBJECT_ID,
+            tob: HASHI_OBJECT_ID,
+            num_consumed_presigs: 0n,
+        },
+    } as never);
+}
+
+const WELL_FORMED_CONFIG = [
+    { key: "paused", value: { $kind: "Bool", Bool: false } },
+    { key: "bitcoin_chain_id", value: { $kind: "Address", Address: `0x${"a".repeat(64)}` } },
+    { key: "bitcoin_deposit_minimum", value: { $kind: "U64", U64: "30000" } },
+    { key: "bitcoin_withdrawal_minimum", value: { $kind: "U64", U64: "30000" } },
+    { key: "bitcoin_confirmation_threshold", value: { $kind: "U64", U64: "6" } },
+    { key: "withdrawal_cancellation_cooldown_ms", value: { $kind: "U64", U64: "3600000" } },
+];
 
 describe("HashiClient", () => {
     let client: SuiGrpcClient & { hashi: HashiClient };
@@ -182,7 +228,232 @@ describe("HashiClient", () => {
     });
 
     describe("deposit", () => {
-        it.todo("creates a deposit");
+        const validTxid = "0x" + "ef".repeat(32);
+        const testSigner = Ed25519Keypair.generate();
+
+        // Stub the network call so happy-path tests don't hit a real node.
+        // Spy on `client.core` (the raw CoreClient instance) rather than
+        // `client` itself — `$extend` wraps the client in a Proxy that caches
+        // bound method references, so a spy installed on the Proxy gets
+        // shadowed by the cache on subsequent reads. The underlying target is
+        // reachable via `client.core` since `CoreClient` sets `core = this`,
+        // and `HashiClient` stores that same target internally.
+        let signExecSpy: ReturnType<typeof vi.spyOn>;
+        beforeEach(() => {
+            signExecSpy = vi.spyOn(client.core, "signAndExecuteTransaction").mockResolvedValue({
+                $kind: "Transaction",
+                Transaction: { status: { success: true } },
+            } as never);
+        });
+
+        it("throws HashiPausedError when the protocol is paused", async () => {
+            mockHashiWithConfig([
+                ...WELL_FORMED_CONFIG.filter((e) => e.key !== "paused"),
+                { key: "paused", value: { $kind: "Bool", Bool: true } },
+            ]);
+
+            const promise = client.hashi.deposit({
+                signer: testSigner,
+                txid: validTxid,
+                utxos: [{ vout: 0, amountSats: 100_000n }],
+                recipient: TEST_SUI_ADDRESS,
+            });
+
+            await expect(promise).rejects.toBeInstanceOf(HashiPausedError);
+            await expect(promise).rejects.toMatchObject({ operation: "deposit" });
+            expect(signExecSpy).not.toHaveBeenCalled();
+        });
+
+        it("prefers HashiPausedError over AmountBelowMinimumError when both would apply", async () => {
+            // Pause check must run before the minimum check — if these two
+            // fired in the wrong order a user depositing dust into a paused
+            // system would see the wrong recovery signal.
+            mockHashiWithConfig([
+                ...WELL_FORMED_CONFIG.filter((e) => e.key !== "paused"),
+                { key: "paused", value: { $kind: "Bool", Bool: true } },
+            ]);
+
+            await expect(
+                client.hashi.deposit({
+                    signer: testSigner,
+                    txid: validTxid,
+                    utxos: [{ vout: 0, amountSats: 1n }], // well below 30 000
+                    recipient: TEST_SUI_ADDRESS,
+                }),
+            ).rejects.toBeInstanceOf(HashiPausedError);
+        });
+
+        it("throws AmountBelowMinimumError carrying every violation for an under-minimum batch", async () => {
+            // WELL_FORMED_CONFIG sets bitcoin_deposit_minimum = 30_000 sats.
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
+
+            const promise = client.hashi.deposit({
+                signer: testSigner,
+                txid: validTxid,
+                utxos: [
+                    { vout: 1, amountSats: 10_000n },
+                    { vout: 3, amountSats: 50_000n }, // passes
+                    { vout: 7, amountSats: 20_000n },
+                ],
+                recipient: TEST_SUI_ADDRESS,
+            });
+
+            await expect(promise).rejects.toBeInstanceOf(AmountBelowMinimumError);
+            await expect(promise).rejects.toMatchObject({
+                violations: [
+                    { amount: 10_000n, minimum: 30_000n, vout: 1 },
+                    { amount: 20_000n, minimum: 30_000n, vout: 7 },
+                ],
+            });
+            expect(signExecSpy).not.toHaveBeenCalled();
+        });
+
+        it("accepts a UTXO at exactly the minimum (boundary = pass)", async () => {
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
+            await client.hashi.deposit({
+                signer: testSigner,
+                txid: validTxid,
+                utxos: [{ vout: 0, amountSats: 30_000n }],
+                recipient: TEST_SUI_ADDRESS,
+            });
+            expect(signExecSpy).toHaveBeenCalledTimes(1);
+        });
+
+        it("rejects a UTXO one sat below the minimum (boundary = fail)", async () => {
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
+            await expect(
+                client.hashi.deposit({
+                    signer: testSigner,
+                    txid: validTxid,
+                    utxos: [{ vout: 0, amountSats: 29_999n }],
+                    recipient: TEST_SUI_ADDRESS,
+                }),
+            ).rejects.toBeInstanceOf(AmountBelowMinimumError);
+        });
+
+        it("forwards the built PTB and the provided signer to signAndExecuteTransaction", async () => {
+            // PTB shape is exhaustively covered by `tx.deposit` tests; here we
+            // just verify the surface method hands off correctly.
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
+
+            await client.hashi.deposit({
+                signer: testSigner,
+                txid: validTxid,
+                utxos: [
+                    { vout: 0, amountSats: 100_000n },
+                    { vout: 1, amountSats: 50_000n },
+                ],
+                recipient: TEST_SUI_ADDRESS,
+            });
+
+            expect(signExecSpy).toHaveBeenCalledTimes(1);
+            const call = signExecSpy.mock.calls[0][0] as {
+                signer: unknown;
+                transaction: Transaction;
+            };
+            expect(call.signer).toBe(testSigner);
+            expect(call.transaction).toBeInstanceOf(Transaction);
+            expect(call.transaction.getData().commands).toHaveLength(6);
+        });
+
+        it("fetches the governance snapshot exactly once per deposit call", async () => {
+            const getSpy = vi.spyOn(Hashi, "get");
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
+
+            await client.hashi.deposit({
+                signer: testSigner,
+                txid: validTxid,
+                utxos: [{ vout: 0, amountSats: 100_000n }],
+                recipient: TEST_SUI_ADDRESS,
+            });
+
+            expect(getSpy).toHaveBeenCalledTimes(1);
+        });
+
+        describe("structural validation (no chain read)", () => {
+            it("rejects a malformed txid before reading chain state", async () => {
+                const getSpy = vi.spyOn(Hashi, "get");
+                await expect(
+                    client.hashi.deposit({
+                        signer: testSigner,
+                        txid: "0xabc", // too short
+                        utxos: [{ vout: 0, amountSats: 100_000n }],
+                        recipient: TEST_SUI_ADDRESS,
+                    }),
+                ).rejects.toBeInstanceOf(InvalidDepositParamsError);
+                expect(getSpy).not.toHaveBeenCalled();
+                expect(signExecSpy).not.toHaveBeenCalled();
+            });
+
+            it("rejects a malformed recipient", async () => {
+                await expect(
+                    client.hashi.deposit({
+                        signer: testSigner,
+                        txid: validTxid,
+                        utxos: [{ vout: 0, amountSats: 100_000n }],
+                        recipient: "not-a-sui-address",
+                    }),
+                ).rejects.toBeInstanceOf(InvalidDepositParamsError);
+                expect(signExecSpy).not.toHaveBeenCalled();
+            });
+
+            it("rejects an empty utxos array", async () => {
+                await expect(
+                    client.hashi.deposit({
+                        signer: testSigner,
+                        txid: validTxid,
+                        utxos: [],
+                        recipient: TEST_SUI_ADDRESS,
+                    }),
+                ).rejects.toMatchObject({
+                    name: "InvalidDepositParamsError",
+                    reason: expect.stringContaining("at least one UTXO"),
+                });
+                expect(signExecSpy).not.toHaveBeenCalled();
+            });
+
+            it("rejects duplicate vouts within a single deposit", async () => {
+                await expect(
+                    client.hashi.deposit({
+                        signer: testSigner,
+                        txid: validTxid,
+                        utxos: [
+                            { vout: 0, amountSats: 100_000n },
+                            { vout: 0, amountSats: 50_000n },
+                        ],
+                        recipient: TEST_SUI_ADDRESS,
+                    }),
+                ).rejects.toMatchObject({
+                    name: "InvalidDepositParamsError",
+                    reason: expect.stringContaining("duplicate `vout`"),
+                });
+                expect(signExecSpy).not.toHaveBeenCalled();
+            });
+
+            it("rejects a non-integer vout", async () => {
+                await expect(
+                    client.hashi.deposit({
+                        signer: testSigner,
+                        txid: validTxid,
+                        utxos: [{ vout: 1.5, amountSats: 100_000n }],
+                        recipient: TEST_SUI_ADDRESS,
+                    }),
+                ).rejects.toBeInstanceOf(InvalidDepositParamsError);
+                expect(signExecSpy).not.toHaveBeenCalled();
+            });
+
+            it("rejects a negative vout", async () => {
+                await expect(
+                    client.hashi.deposit({
+                        signer: testSigner,
+                        txid: validTxid,
+                        utxos: [{ vout: -1, amountSats: 100_000n }],
+                        recipient: TEST_SUI_ADDRESS,
+                    }),
+                ).rejects.toBeInstanceOf(InvalidDepositParamsError);
+                expect(signExecSpy).not.toHaveBeenCalled();
+            });
+        });
     });
 
     describe("withdraw", () => {
@@ -290,58 +561,9 @@ describe("HashiClient", () => {
         });
 
         describe("all / governance getters", () => {
-            /**
-             * Build a mocked Hashi.get() response with a custom config contents
-             * array. All other fields carry minimal-but-valid placeholders so
-             * the BCS-decoded json shape matches what the SDK expects.
-             */
-            function mockHashiWithConfig(
-                contents: Array<{
-                    key: string;
-                    value: { $kind: string; [k: string]: unknown };
-                }>,
-            ) {
-                vi.spyOn(Hashi, "get").mockResolvedValueOnce({
-                    json: {
-                        id: HASHI_OBJECT_ID,
-                        committee_set: {
-                            members: HASHI_OBJECT_ID,
-                            epoch: 0n,
-                            committees: HASHI_OBJECT_ID,
-                            pending_epoch_change: null,
-                            mpc_public_key: [],
-                        },
-                        config: {
-                            config: { contents },
-                            enabled_versions: { contents: [] },
-                            upgrade_cap: null,
-                        },
-                        treasury: { objects: HASHI_OBJECT_ID },
-                        proposals: HASHI_OBJECT_ID,
-                        tob: HASHI_OBJECT_ID,
-                        num_consumed_presigs: 0n,
-                    },
-                } as never);
-            }
-
-            const wellFormedContents = [
-                { key: "paused", value: { $kind: "Bool", Bool: false } },
-                {
-                    key: "bitcoin_chain_id",
-                    value: { $kind: "Address", Address: `0x${"a".repeat(64)}` },
-                },
-                { key: "bitcoin_deposit_minimum", value: { $kind: "U64", U64: "30000" } },
-                { key: "bitcoin_withdrawal_minimum", value: { $kind: "U64", U64: "30000" } },
-                { key: "bitcoin_confirmation_threshold", value: { $kind: "U64", U64: "6" } },
-                {
-                    key: "withdrawal_cancellation_cooldown_ms",
-                    value: { $kind: "U64", U64: "3600000" },
-                },
-            ];
-
             it("all() returns a full typed snapshot from one Hashi.get call", async () => {
                 const getSpy = vi.spyOn(Hashi, "get");
-                mockHashiWithConfig(wellFormedContents);
+                mockHashiWithConfig(WELL_FORMED_CONFIG);
 
                 const snap = await client.hashi.view.all();
 
@@ -360,7 +582,7 @@ describe("HashiClient", () => {
 
             it("floors bitcoin_deposit_minimum to DUST_RELAY_MIN_VALUE (546)", async () => {
                 mockHashiWithConfig([
-                    ...wellFormedContents.filter((e) => e.key !== "bitcoin_deposit_minimum"),
+                    ...WELL_FORMED_CONFIG.filter((e) => e.key !== "bitcoin_deposit_minimum"),
                     { key: "bitcoin_deposit_minimum", value: { $kind: "U64", U64: "100" } },
                 ]);
 
@@ -372,7 +594,7 @@ describe("HashiClient", () => {
 
             it("floors bitcoin_withdrawal_minimum to DUST_RELAY_MIN_VALUE + 1 (547)", async () => {
                 mockHashiWithConfig([
-                    ...wellFormedContents.filter((e) => e.key !== "bitcoin_withdrawal_minimum"),
+                    ...WELL_FORMED_CONFIG.filter((e) => e.key !== "bitcoin_withdrawal_minimum"),
                     { key: "bitcoin_withdrawal_minimum", value: { $kind: "U64", U64: "200" } },
                 ]);
 
@@ -383,7 +605,7 @@ describe("HashiClient", () => {
             });
 
             it("throws HashiConfigError naming the missing key", async () => {
-                mockHashiWithConfig(wellFormedContents.filter((e) => e.key !== "paused"));
+                mockHashiWithConfig(WELL_FORMED_CONFIG.filter((e) => e.key !== "paused"));
 
                 await expect(client.hashi.view.all()).rejects.toMatchObject({
                     name: "HashiConfigError",
@@ -395,7 +617,7 @@ describe("HashiClient", () => {
 
             it("throws HashiConfigError when variant is wrong", async () => {
                 mockHashiWithConfig([
-                    ...wellFormedContents.filter((e) => e.key !== "paused"),
+                    ...WELL_FORMED_CONFIG.filter((e) => e.key !== "paused"),
                     { key: "paused", value: { $kind: "U64", U64: "1" } },
                 ]);
 
@@ -409,14 +631,14 @@ describe("HashiClient", () => {
 
             it("each individual view method fetches via all() (one Hashi.get per call)", async () => {
                 const getSpy = vi.spyOn(Hashi, "get");
-                mockHashiWithConfig(wellFormedContents);
+                mockHashiWithConfig(WELL_FORMED_CONFIG);
 
                 expect(await client.hashi.view.paused()).toBe(false);
                 expect(getSpy).toHaveBeenCalledTimes(1);
             });
 
             it("HashiConfigError is instanceof Error and carries structured fields", async () => {
-                mockHashiWithConfig(wellFormedContents.filter((e) => e.key !== "paused"));
+                mockHashiWithConfig(WELL_FORMED_CONFIG.filter((e) => e.key !== "paused"));
 
                 try {
                     await client.hashi.view.all();
@@ -431,12 +653,11 @@ describe("HashiClient", () => {
 
     describe("tx", () => {
         describe("deposit", () => {
-            it("composes utxo_id + utxo + deposit", () => {
+            it("composes utxo_id + utxo + deposit for a single UTXO", () => {
                 const tx = client.hashi.tx.deposit({
                     txid: "0x" + "ab".repeat(32),
-                    vout: 0,
-                    amount: 100_000n,
-                    suiAddress: TEST_SUI_ADDRESS,
+                    utxos: [{ vout: 0, amountSats: 100_000n }],
+                    recipient: TEST_SUI_ADDRESS,
                 });
                 expect(tx).toBeInstanceOf(Transaction);
 
@@ -451,6 +672,30 @@ describe("HashiClient", () => {
 
                 expect(commands[2].$kind).toBe("MoveCall");
                 expect(commands[2].MoveCall?.function).toBe("deposit");
+            });
+
+            it("batches multiple UTXOs into one PTB (one triple per UTXO)", () => {
+                const tx = client.hashi.tx.deposit({
+                    txid: "0x" + "cd".repeat(32),
+                    utxos: [
+                        { vout: 0, amountSats: 100_000n },
+                        { vout: 2, amountSats: 50_000n },
+                    ],
+                    recipient: TEST_SUI_ADDRESS,
+                });
+
+                const { commands } = tx.getData();
+                expect(commands).toHaveLength(6);
+
+                const functions = commands.map((c) => c.MoveCall?.function);
+                expect(functions).toEqual([
+                    "utxo_id",
+                    "utxo",
+                    "deposit",
+                    "utxo_id",
+                    "utxo",
+                    "deposit",
+                ]);
             });
         });
 

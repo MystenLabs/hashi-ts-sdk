@@ -5,8 +5,12 @@ TypeScript SDK for interacting with the Hashi Sui Move smart contracts.
 ## Structure
 
 - `src/` — SDK source code (TypeScript)
-  - `client.ts` — `HashiClient` class (via `$extend` pattern), exposes `generateDepositAddress`, `view.*`, `tx.*`, `call.*`
+  - `client.ts` — `HashiClient` class (via `$extend` pattern); direct methods (`deposit` — signs + executes), plus `generateDepositAddress`, `view.*`, `tx.*`, `call.*`
   - `bitcoin.ts` — Bitcoin address derivation: key derivation (HKDF-SHA3-256 over secp256k1) and taproot address construction (P2TR script-path)
+  - `constants.ts` — `NETWORK_CONFIG` (Hashi object/package ids and default BTC network per Sui network)
+  - `errors.ts` — typed SDK errors (`HashiConfigError`, `HashiFetchError`, `HashiPausedError`, `AmountBelowMinimumError`, `InvalidDepositParamsError`)
+  - `types.ts` — public types (`DepositParams`, `UtxoOutput`, `GovernanceConfig`, network/option shapes)
+  - `util.ts` — internal helpers (`assertHex32` hex validation, `entry` for VecMap decoding)
   - `index.ts` — public exports
   - `contracts/` — auto-generated Move bindings (`@mysten/codegen`); do not edit
 - `test/` — unit and integration tests (vitest)
@@ -26,6 +30,15 @@ TypeScript SDK for interacting with the Hashi Sui Move smart contracts.
 - `@mysten/sui`, `@mysten/codegen` — peer dependencies (Sui SDK)
 - `@noble/curves`, `@noble/hashes` — secp256k1 point math and SHA3-HKDF for key derivation
 - `@scure/base` — bech32m encoding for taproot addresses
+
+## Networks
+
+Currently only Sui **devnet** is wired up (`src/constants.ts`); BTC defaults to **signet**. Devnet support is **temporary** and will be deprecated in favor of:
+
+- **testnet** — for end-to-end testing of SDK consumers (and our own real-network tests).
+- **mainnet** — for production DeFi consumers using the SDK against live BTC.
+
+Update `NETWORK_CONFIG` in `src/constants.ts` when those network deployments land.
 
 ## Bitcoin Address Scheme
 
