@@ -17,10 +17,13 @@ TypeScript SDK for interacting with the Hashi Sui Move smart contracts.
 - `hashi/` — git submodule ([MystenLabs/hashi](https://github.com/MystenLabs/hashi)); contains `packages/` with Sui Move contracts. This will be removed when hashi is published on MVR because codegen will no longer have to use the `@local-pkg` util.
 - `package.json` — package: `@mysten/hashi`, license: Apache-2.0
 - `tsconfig.json` — strict TS config, ES2020 target, NodeNext modules
+- `sonar-project.properties` — SonarQube configuration (project key, sources, lcov path, exclusions)
+- `.github/workflows/` — CI: `lint.yml`, `test.yml`, `sonarqube.yml` (coverage + static analysis on push/PR to `main`)
 
 ## Commands
 
 - `pnpm test` — run tests via vitest
+- `pnpm coverage` — run unit tests with v8 coverage (writes `coverage/lcov.info` for SonarQube)
 - `pnpm build-contract` — build the Sui Move contracts (`hashi/packages/hashi/`) in order for them to be consumed by the codegen tool
 - `pnpm codegen` — regenerate TypeScript bindings from Move contracts
 - `pnpm format` — format code with prettier
