@@ -74,19 +74,25 @@ export class HashiFetchError extends Error {
     }
 }
 
-/** One UTXO that failed the client-side deposit-minimum check. */
+/**
+ * One amount that failed a client-side minimum check. `vout` is present for
+ * deposit-UTXO violations (so callers can map each offender back to a Bitcoin
+ * output) and absent for withdrawal violations, where there is a single
+ * top-level amount and no output index.
+ */
 export interface AmountViolation {
     readonly amount: bigint;
     readonly minimum: bigint;
-    readonly vout: number;
+    readonly vout?: number;
 }
 
 /**
- * Thrown by `HashiClient.deposit()` when one or more UTXOs are below the live
- * on-chain deposit minimum. Carries every offending UTXO so callers can fix
- * all violations in one round-trip rather than retrying N times. Raised after
+ * Thrown by `HashiClient.deposit()` and `HashiClient.requestWithdrawal()` when
+ * one or more amounts are below the live on-chain minimum. Deposits may carry
+ * multiple violations (one per offending UTXO) so callers can fix the whole
+ * batch in one round-trip; withdrawals always carry exactly one. Raised after
  * the governance snapshot is fetched but before any PTB is built — mirrors
- * the Move-side `EBelowMinimumDeposit` abort in `deposit::deposit`.
+ * the Move-side `EBelowMinimumDeposit` / `EBelowMinimumWithdrawal` aborts.
  */
 export class AmountBelowMinimumError extends Error {
     readonly violations: readonly AmountViolation[];
@@ -94,14 +100,25 @@ export class AmountBelowMinimumError extends Error {
     constructor(details: { violations: readonly AmountViolation[] }) {
         const { violations } = details;
         const head = violations[0];
-        const summary =
-            violations.length === 1
-                ? `UTXO at vout ${head.vout} has amount ${head.amount} sats, ` +
-                  `below the protocol minimum of ${head.minimum} sats.`
-                : `${violations.length} UTXOs are below the protocol minimum ` +
-                  `(${head.minimum} sats): ${violations
-                      .map((v) => `vout ${v.vout} = ${v.amount} sats`)
-                      .join(", ")}.`;
+        let summary: string;
+        if (violations.length === 1) {
+            summary =
+                head.vout !== undefined
+                    ? `UTXO at vout ${head.vout} has amount ${head.amount} sats, ` +
+                      `below the protocol minimum of ${head.minimum} sats.`
+                    : `Amount ${head.amount} sats is below the protocol minimum ` +
+                      `of ${head.minimum} sats.`;
+        } else {
+            summary =
+                `${violations.length} UTXOs are below the protocol minimum ` +
+                `(${head.minimum} sats): ${violations
+                    .map((v) =>
+                        v.vout !== undefined
+                            ? `vout ${v.vout} = ${v.amount} sats`
+                            : `${v.amount} sats`,
+                    )
+                    .join(", ")}.`;
+        }
         super(summary);
         this.name = "AmountBelowMinimumError";
         this.violations = violations;
@@ -131,20 +148,52 @@ export class HashiPausedError extends Error {
 }
 
 /**
- * Thrown by `HashiClient.deposit()` when the caller-supplied `DepositParams`
- * don't meet the structural preconditions (empty `utxos`, duplicate `vout`
- * within a txid, malformed `txid` or `recipient`). Raised before any chain
- * read so even a paused or unreachable protocol surfaces the client-side
- * bug first.
+ * Thrown by `HashiClient` direct methods when the caller-supplied params
+ * don't meet structural preconditions (empty `utxos`, duplicate `vout`,
+ * malformed hex). Raised before any chain read so even a paused or
+ * unreachable protocol surfaces the client-side bug first.
  */
-export class InvalidDepositParamsError extends Error {
+export class InvalidParamsError extends Error {
     readonly reason: string;
     readonly detail?: string;
 
     constructor(details: { reason: string; detail?: string }, options?: { cause?: unknown }) {
         super(details.detail ? `${details.reason}: ${details.detail}` : details.reason, options);
-        this.name = "InvalidDepositParamsError";
+        this.name = "InvalidParamsError";
         this.reason = details.reason;
         this.detail = details.detail;
+    }
+}
+
+/**
+ * Stable discriminator for `InvalidBitcoinAddressError`. Callers can switch on
+ * `code` to surface targeted UX (e.g. "wrong network" → prompt the user to
+ * switch, "bad-checksum" → flag a typo) without string-parsing the message.
+ */
+export type InvalidBitcoinAddressCode =
+    | "malformed"
+    | "bad-checksum"
+    | "wrong-network"
+    | "unsupported-version"
+    | "bad-program-length";
+
+/**
+ * Thrown when a user-supplied Bitcoin address cannot be decoded into a
+ * witness program that the Hashi withdrawal path accepts. `code` is a stable
+ * discriminator suitable for programmatic handling; `address` echoes the
+ * offending input back so callers can display it.
+ */
+export class InvalidBitcoinAddressError extends Error {
+    readonly address: string;
+    readonly code: InvalidBitcoinAddressCode;
+
+    constructor(
+        details: { address: string; code: InvalidBitcoinAddressCode; message: string },
+        options?: { cause?: unknown },
+    ) {
+        super(details.message, options);
+        this.name = "InvalidBitcoinAddressError";
+        this.address = details.address;
+        this.code = details.code;
     }
 }

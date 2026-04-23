@@ -4,7 +4,8 @@ import {
     AmountBelowMinimumError,
     HashiConfigError,
     HashiPausedError,
-    InvalidDepositParamsError,
+    InvalidBitcoinAddressError,
+    InvalidParamsError,
 } from "../../src/errors.js";
 import { Hashi } from "../../src/contracts/hashi/hashi.js";
 import { generateDepositAddress } from "../../src/bitcoin.js";
@@ -12,6 +13,7 @@ import { SuiGrpcClient } from "@mysten/sui/grpc";
 import { Transaction } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
+import { bech32, bech32m } from "@scure/base";
 import { fromHex } from "@mysten/sui/utils";
 
 const HASHI_OBJECT_ID = "0x0000000000000000000000000000000000000000000000000000000000000001";
@@ -380,7 +382,7 @@ describe("HashiClient", () => {
                         utxos: [{ vout: 0, amountSats: 100_000n }],
                         recipient: TEST_SUI_ADDRESS,
                     }),
-                ).rejects.toBeInstanceOf(InvalidDepositParamsError);
+                ).rejects.toBeInstanceOf(InvalidParamsError);
                 expect(getSpy).not.toHaveBeenCalled();
                 expect(signExecSpy).not.toHaveBeenCalled();
             });
@@ -393,7 +395,7 @@ describe("HashiClient", () => {
                         utxos: [{ vout: 0, amountSats: 100_000n }],
                         recipient: "not-a-sui-address",
                     }),
-                ).rejects.toBeInstanceOf(InvalidDepositParamsError);
+                ).rejects.toBeInstanceOf(InvalidParamsError);
                 expect(signExecSpy).not.toHaveBeenCalled();
             });
 
@@ -406,7 +408,7 @@ describe("HashiClient", () => {
                         recipient: TEST_SUI_ADDRESS,
                     }),
                 ).rejects.toMatchObject({
-                    name: "InvalidDepositParamsError",
+                    name: "InvalidParamsError",
                     reason: expect.stringContaining("at least one UTXO"),
                 });
                 expect(signExecSpy).not.toHaveBeenCalled();
@@ -424,7 +426,7 @@ describe("HashiClient", () => {
                         recipient: TEST_SUI_ADDRESS,
                     }),
                 ).rejects.toMatchObject({
-                    name: "InvalidDepositParamsError",
+                    name: "InvalidParamsError",
                     reason: expect.stringContaining("duplicate `vout`"),
                 });
                 expect(signExecSpy).not.toHaveBeenCalled();
@@ -438,7 +440,7 @@ describe("HashiClient", () => {
                         utxos: [{ vout: 1.5, amountSats: 100_000n }],
                         recipient: TEST_SUI_ADDRESS,
                     }),
-                ).rejects.toBeInstanceOf(InvalidDepositParamsError);
+                ).rejects.toBeInstanceOf(InvalidParamsError);
                 expect(signExecSpy).not.toHaveBeenCalled();
             });
 
@@ -450,14 +452,213 @@ describe("HashiClient", () => {
                         utxos: [{ vout: -1, amountSats: 100_000n }],
                         recipient: TEST_SUI_ADDRESS,
                     }),
-                ).rejects.toBeInstanceOf(InvalidDepositParamsError);
+                ).rejects.toBeInstanceOf(InvalidParamsError);
                 expect(signExecSpy).not.toHaveBeenCalled();
             });
         });
     });
 
-    describe("withdraw", () => {
-        it.todo("creates a withdrawal");
+    describe("requestWithdrawal", () => {
+        const testSigner = Ed25519Keypair.generate();
+
+        // Test client is configured for `bitcoinNetwork: "regtest"` (see outer
+        // beforeEach), so valid deposit addresses must use the `bcrt` HRP.
+        const VALID_REGTEST_P2WPKH = bech32.encode("bcrt" as "bcrt", [
+            0,
+            ...bech32.toWords(new Uint8Array(20).fill(0xaa)),
+        ]);
+        const VALID_REGTEST_P2TR = bech32m.encode("bcrt" as "bcrt", [
+            1,
+            ...bech32m.toWords(new Uint8Array(32).fill(0xbb)),
+        ]);
+
+        let signExecSpy: ReturnType<typeof vi.spyOn>;
+        beforeEach(() => {
+            signExecSpy = vi.spyOn(client.core, "signAndExecuteTransaction").mockResolvedValue({
+                $kind: "Transaction",
+                Transaction: { status: { success: true } },
+            } as never);
+        });
+
+        it("rejects a malformed address before reading chain state", async () => {
+            const getSpy = vi.spyOn(Hashi, "get");
+            await expect(
+                client.hashi.requestWithdrawal({
+                    signer: testSigner,
+                    amountSats: 100_000n,
+                    bitcoinAddress: "not-an-address",
+                }),
+            ).rejects.toBeInstanceOf(InvalidBitcoinAddressError);
+            expect(getSpy).not.toHaveBeenCalled();
+            expect(signExecSpy).not.toHaveBeenCalled();
+        });
+
+        it("rejects a wrong-network address with code `wrong-network`", async () => {
+            // Mainnet P2WPKH passed to a regtest-configured client.
+            await expect(
+                client.hashi.requestWithdrawal({
+                    signer: testSigner,
+                    amountSats: 100_000n,
+                    bitcoinAddress: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+                }),
+            ).rejects.toMatchObject({
+                name: "InvalidBitcoinAddressError",
+                code: "wrong-network",
+            });
+            expect(signExecSpy).not.toHaveBeenCalled();
+        });
+
+        it("throws HashiPausedError when the protocol is paused", async () => {
+            mockHashiWithConfig([
+                ...WELL_FORMED_CONFIG.filter((e) => e.key !== "paused"),
+                { key: "paused", value: { $kind: "Bool", Bool: true } },
+            ]);
+            const promise = client.hashi.requestWithdrawal({
+                signer: testSigner,
+                amountSats: 100_000n,
+                bitcoinAddress: VALID_REGTEST_P2TR,
+            });
+            await expect(promise).rejects.toBeInstanceOf(HashiPausedError);
+            await expect(promise).rejects.toMatchObject({ operation: "withdraw" });
+            expect(signExecSpy).not.toHaveBeenCalled();
+        });
+
+        it("throws AmountBelowMinimumError with a single vout-less violation", async () => {
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
+
+            let caught: AmountBelowMinimumError | undefined;
+            try {
+                await client.hashi.requestWithdrawal({
+                    signer: testSigner,
+                    amountSats: 29_999n, // one below 30_000 (WELL_FORMED_CONFIG)
+                    bitcoinAddress: VALID_REGTEST_P2TR,
+                });
+                expect.fail("expected to throw");
+            } catch (err) {
+                caught = err as AmountBelowMinimumError;
+            }
+
+            expect(caught).toBeInstanceOf(AmountBelowMinimumError);
+            expect(caught!.violations).toHaveLength(1);
+            expect(caught!.violations[0]).toEqual({
+                amount: 29_999n,
+                minimum: 30_000n,
+            });
+            // Withdrawal violation carries no `vout` — the optional field is
+            // absent rather than set to anything falsy-but-present.
+            expect(caught!.violations[0].vout).toBeUndefined();
+            // And the rendered message reflects that (no "UTXO at vout" prefix).
+            expect(caught!.message).toMatch(/^Amount 29999 sats/);
+            expect(signExecSpy).not.toHaveBeenCalled();
+        });
+
+        it("accepts an amount exactly at the minimum (boundary = pass)", async () => {
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
+            await client.hashi.requestWithdrawal({
+                signer: testSigner,
+                amountSats: 30_000n,
+                bitcoinAddress: VALID_REGTEST_P2TR,
+            });
+            expect(signExecSpy).toHaveBeenCalledTimes(1);
+        });
+
+        it("forwards the built PTB and the provided signer to signAndExecuteTransaction", async () => {
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
+            await client.hashi.requestWithdrawal({
+                signer: testSigner,
+                amountSats: 100_000n,
+                bitcoinAddress: VALID_REGTEST_P2WPKH,
+            });
+
+            expect(signExecSpy).toHaveBeenCalledTimes(1);
+            const call = signExecSpy.mock.calls[0][0] as {
+                signer: unknown;
+                transaction: Transaction;
+            };
+            expect(call.signer).toBe(testSigner);
+            expect(call.transaction).toBeInstanceOf(Transaction);
+        });
+
+        it("fetches the governance snapshot exactly once per call", async () => {
+            const getSpy = vi.spyOn(Hashi, "get");
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
+
+            await client.hashi.requestWithdrawal({
+                signer: testSigner,
+                amountSats: 100_000n,
+                bitcoinAddress: VALID_REGTEST_P2TR,
+            });
+
+            expect(getSpy).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    describe("cancelWithdrawal", () => {
+        const testSigner = Ed25519Keypair.generate();
+
+        let signExecSpy: ReturnType<typeof vi.spyOn>;
+        beforeEach(() => {
+            signExecSpy = vi.spyOn(client.core, "signAndExecuteTransaction").mockResolvedValue({
+                $kind: "Transaction",
+                Transaction: { status: { success: true } },
+            } as never);
+        });
+
+        it("rejects a malformed requestId before any chain or tx work", async () => {
+            const getSpy = vi.spyOn(Hashi, "get");
+            await expect(
+                client.hashi.cancelWithdrawal({
+                    signer: testSigner,
+                    requestId: "0xabc", // too short
+                }),
+            ).rejects.toBeInstanceOf(InvalidParamsError);
+            expect(getSpy).not.toHaveBeenCalled();
+            expect(signExecSpy).not.toHaveBeenCalled();
+        });
+
+        it("happy path: forwards signer + a 3-command PTB to signAndExecuteTransaction", async () => {
+            await client.hashi.cancelWithdrawal({
+                signer: testSigner,
+                requestId: REQUEST_ID,
+            });
+
+            expect(signExecSpy).toHaveBeenCalledTimes(1);
+            const call = signExecSpy.mock.calls[0][0] as {
+                signer: unknown;
+                transaction: Transaction;
+            };
+            expect(call.signer).toBe(testSigner);
+            expect(call.transaction).toBeInstanceOf(Transaction);
+            // `tx.cancelWithdrawal` composes cancel_withdrawal + from_balance +
+            // transferObjects — 3 commands total.
+            expect(call.transaction.getData().commands).toHaveLength(3);
+        });
+
+        it("does not pause-check (Move permits cancellation while paused)", async () => {
+            // Move's `cancel_withdrawal` has no `assert_unpaused` call, so the
+            // SDK mirrors that by skipping the governance fetch entirely —
+            // users must be able to unwind a pending request even if the
+            // system is paused.
+            const getSpy = vi.spyOn(Hashi, "get");
+            await client.hashi.cancelWithdrawal({
+                signer: testSigner,
+                requestId: REQUEST_ID,
+            });
+            expect(getSpy).not.toHaveBeenCalled();
+            expect(signExecSpy).toHaveBeenCalledTimes(1);
+        });
+
+        it("passes the signer's Sui address as recipient to tx.cancelWithdrawal", async () => {
+            const txSpy = vi.spyOn(client.hashi.tx, "cancelWithdrawal");
+            await client.hashi.cancelWithdrawal({
+                signer: testSigner,
+                requestId: REQUEST_ID,
+            });
+            expect(txSpy).toHaveBeenCalledWith({
+                requestId: REQUEST_ID,
+                recipient: testSigner.toSuiAddress(),
+            });
+        });
     });
 
     describe("requestSignetFaucet", () => {

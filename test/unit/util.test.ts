@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { assertHex32, entry, type ConfigEntry } from "../../src/util.js";
-import { HashiConfigError, InvalidDepositParamsError } from "../../src/errors.js";
+import { HashiConfigError, InvalidParamsError } from "../../src/errors.js";
 
 describe("assertHex32", () => {
     it("accepts a 0x-prefixed 64-char lowercase hex string", () => {
@@ -13,21 +13,21 @@ describe("assertHex32", () => {
     });
 
     it("rejects a missing 0x prefix", () => {
-        expect(() => assertHex32("a".repeat(64), "txid")).toThrow(InvalidDepositParamsError);
+        expect(() => assertHex32("a".repeat(64), "txid")).toThrow(InvalidParamsError);
     });
 
     it("rejects a string that is too short or too long", () => {
-        expect(() => assertHex32(`0x${"a".repeat(63)}`, "txid")).toThrow(InvalidDepositParamsError);
-        expect(() => assertHex32(`0x${"a".repeat(65)}`, "txid")).toThrow(InvalidDepositParamsError);
+        expect(() => assertHex32(`0x${"a".repeat(63)}`, "txid")).toThrow(InvalidParamsError);
+        expect(() => assertHex32(`0x${"a".repeat(65)}`, "txid")).toThrow(InvalidParamsError);
     });
 
     it("rejects non-hex characters", () => {
-        expect(() => assertHex32(`0x${"z".repeat(64)}`, "txid")).toThrow(InvalidDepositParamsError);
+        expect(() => assertHex32(`0x${"z".repeat(64)}`, "txid")).toThrow(InvalidParamsError);
     });
 
     it("rejects non-string values", () => {
         for (const v of [undefined, null, 123, {}, []]) {
-            expect(() => assertHex32(v, "txid")).toThrow(InvalidDepositParamsError);
+            expect(() => assertHex32(v, "txid")).toThrow(InvalidParamsError);
         }
     });
 
@@ -36,9 +36,9 @@ describe("assertHex32", () => {
             assertHex32("not-hex", "recipient");
             expect.fail("expected to throw");
         } catch (err) {
-            expect(err).toBeInstanceOf(InvalidDepositParamsError);
-            expect((err as InvalidDepositParamsError).reason).toContain("`recipient`");
-            expect((err as InvalidDepositParamsError).detail).toContain('"not-hex"');
+            expect(err).toBeInstanceOf(InvalidParamsError);
+            expect((err as InvalidParamsError).reason).toContain("`recipient`");
+            expect((err as InvalidParamsError).detail).toContain('"not-hex"');
         }
     });
 });

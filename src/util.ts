@@ -1,5 +1,5 @@
 import { Value } from "./contracts/hashi/config_value.js";
-import { HashiConfigError, InvalidDepositParamsError } from "./errors.js";
+import { HashiConfigError, InvalidParamsError } from "./errors.js";
 
 export type ConfigValue = typeof Value.$inferType;
 export type ConfigEntry = { key: string; value: ConfigValue };
@@ -9,12 +9,12 @@ const HEX32_RE = /^0x[0-9a-fA-F]{64}$/;
 
 /**
  * Guards that `value` is a 0x-prefixed 32-byte hex string, throwing
- * `InvalidDepositParamsError` otherwise. `fieldName` is interpolated into
+ * `InvalidParamsError` otherwise. `fieldName` is interpolated into
  * the error message so callers can tell which deposit parameter failed.
  */
 export function assertHex32(value: unknown, fieldName: string): void {
     if (typeof value !== "string" || !HEX32_RE.test(value)) {
-        throw new InvalidDepositParamsError({
+        throw new InvalidParamsError({
             reason: `\`${fieldName}\` must be a 0x-prefixed 32-byte hex string`,
             detail: `got ${JSON.stringify(value)}`,
         });
