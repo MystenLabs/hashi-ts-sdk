@@ -463,11 +463,11 @@ describe("HashiClient", () => {
 
         // Test client is configured for `bitcoinNetwork: "regtest"` (see outer
         // beforeEach), so valid deposit addresses must use the `bcrt` HRP.
-        const VALID_REGTEST_P2WPKH = bech32.encode("bcrt" as "bcrt", [
+        const VALID_REGTEST_P2WPKH = bech32.encode("bcrt" as const, [
             0,
             ...bech32.toWords(new Uint8Array(20).fill(0xaa)),
         ]);
-        const VALID_REGTEST_P2TR = bech32m.encode("bcrt" as "bcrt", [
+        const VALID_REGTEST_P2TR = bech32m.encode("bcrt" as const, [
             1,
             ...bech32m.toWords(new Uint8Array(32).fill(0xbb)),
         ]);

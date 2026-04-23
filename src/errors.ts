@@ -103,19 +103,19 @@ export class AmountBelowMinimumError extends Error {
         let summary: string;
         if (violations.length === 1) {
             summary =
-                head.vout !== undefined
-                    ? `UTXO at vout ${head.vout} has amount ${head.amount} sats, ` +
-                      `below the protocol minimum of ${head.minimum} sats.`
-                    : `Amount ${head.amount} sats is below the protocol minimum ` +
-                      `of ${head.minimum} sats.`;
+                head.vout === undefined
+                    ? `Amount ${head.amount} sats is below the protocol minimum ` +
+                      `of ${head.minimum} sats.`
+                    : `UTXO at vout ${head.vout} has amount ${head.amount} sats, ` +
+                      `below the protocol minimum of ${head.minimum} sats.`;
         } else {
             summary =
                 `${violations.length} UTXOs are below the protocol minimum ` +
                 `(${head.minimum} sats): ${violations
                     .map((v) =>
-                        v.vout !== undefined
-                            ? `vout ${v.vout} = ${v.amount} sats`
-                            : `${v.amount} sats`,
+                        v.vout === undefined
+                            ? `${v.amount} sats`
+                            : `vout ${v.vout} = ${v.amount} sats`,
                     )
                     .join(", ")}.`;
         }
