@@ -35,8 +35,9 @@ import { sha3_256 } from "@noble/hashes/sha3.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { concatBytes } from "@noble/hashes/utils.js";
-import { bech32m } from "@scure/base";
+import { bech32, bech32m } from "@scure/base";
 import { NETWORK_HRP, NUMS_KEY } from "./constants.js";
+import { InvalidBitcoinAddressError } from "./errors.js";
 
 import type { BitcoinNetwork } from "./types.js";
 
@@ -278,4 +279,122 @@ export function generateDepositAddress(
 ): string {
     const childXOnly = deriveChildPubkey(mpcKeyCompressed, suiAddress);
     return taprootScriptPathAddress(childXOnly, network);
+}
+
+// ---------------------------------------------------------------------------
+//  Withdrawal address decoding
+// ---------------------------------------------------------------------------
+
+/**
+ * Decodes a bech32/bech32m SegWit Bitcoin address into a witness program.
+ *
+ * Hashi withdrawals send BTC to a witness-program output, so the SDK only
+ * accepts the two address types the MPC committee currently supports:
+ *
+ *   - **P2WPKH** — witness version 0, 20-byte program (`bc1q…`, `tb1q…`)
+ *   - **P2TR**   — witness version 1, 32-byte program (`bc1p…`, `tb1p…`)
+ *
+ * Legacy base58 addresses (`1…`, `3…`) aren't bech32 at all and surface as
+ * `"malformed"`. Version-0 32-byte P2WSH is rejected (no committee support).
+ *
+ * Per BIP-350, v0 must use a bech32 checksum and v1+ must use bech32m. This
+ * function enforces that rule strictly — a v0 address encoded as bech32m
+ * (or vice versa) fails with `"bad-checksum"`.
+ *
+ * @param address - User-supplied Bitcoin address string
+ * @param network - Expected Bitcoin network; the HRP must match
+ * @returns `{ version, program }` — witness version + raw program bytes
+ * @throws {@link InvalidBitcoinAddressError} with a structured `code` on any failure
+ */
+export function bitcoinAddressToWitnessProgram(
+    address: string,
+    network: BitcoinNetwork,
+): { version: number; program: Uint8Array } {
+    const expectedHrp = NETWORK_HRP[network];
+
+    // Try both checksum variants and record which one validated. We defer the
+    // BIP-350 version ↔ variant enforcement until after we know the version,
+    // so we can emit a targeted `"bad-checksum"` instead of a generic parse
+    // failure when the user encoded with the wrong variant.
+    let decoded: { prefix: string; words: number[] } | undefined;
+    let variant: "bech32" | "bech32m" | undefined;
+    try {
+        decoded = bech32.decode(address as `${string}1${string}`);
+        variant = "bech32";
+    } catch {
+        // fall through to bech32m
+    }
+    if (!decoded) {
+        try {
+            decoded = bech32m.decode(address as `${string}1${string}`);
+            variant = "bech32m";
+        } catch (cause) {
+            throw new InvalidBitcoinAddressError(
+                {
+                    address,
+                    code: "malformed",
+                    message: `Bitcoin address "${address}" is not valid bech32 or bech32m.`,
+                },
+                { cause },
+            );
+        }
+    }
+
+    if (decoded.words.length === 0) {
+        throw new InvalidBitcoinAddressError({
+            address,
+            code: "malformed",
+            message: `Bitcoin address "${address}" has no data payload.`,
+        });
+    }
+
+    const version = decoded.words[0];
+
+    // BIP-350: witness v0 → bech32, v1+ → bech32m. Cross-variant encodings
+    // are malformed per spec even if the bits decode cleanly.
+    const expectedVariant = version === 0 ? "bech32" : "bech32m";
+    if (variant !== expectedVariant) {
+        throw new InvalidBitcoinAddressError({
+            address,
+            code: "bad-checksum",
+            message:
+                `Bitcoin address "${address}" has witness version ${version} but a ` +
+                `${variant} checksum; BIP-350 requires ${expectedVariant} for this version.`,
+        });
+    }
+
+    if (decoded.prefix !== expectedHrp) {
+        throw new InvalidBitcoinAddressError({
+            address,
+            code: "wrong-network",
+            message:
+                `Bitcoin address "${address}" uses HRP "${decoded.prefix}" but the client ` +
+                `is configured for ${network} (expected "${expectedHrp}").`,
+        });
+    }
+
+    if (version !== 0 && version !== 1) {
+        throw new InvalidBitcoinAddressError({
+            address,
+            code: "unsupported-version",
+            message:
+                `Bitcoin address "${address}" has witness version ${version}; ` +
+                `Hashi supports only v0 (P2WPKH) and v1 (P2TR).`,
+        });
+    }
+
+    const program = bech32.fromWords(decoded.words.slice(1));
+
+    const expectedLen = version === 0 ? 20 : 32;
+    if (program.length !== expectedLen) {
+        throw new InvalidBitcoinAddressError({
+            address,
+            code: "bad-program-length",
+            message:
+                `Bitcoin address "${address}" has a ${program.length}-byte witness program; ` +
+                `v${version} (${version === 0 ? "P2WPKH" : "P2TR"}) requires ${expectedLen} bytes.`,
+        });
+    }
+
+    return { version, program };
 }

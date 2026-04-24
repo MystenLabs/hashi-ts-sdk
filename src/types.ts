@@ -61,3 +61,21 @@ export interface DepositParams {
      */
     readonly recipient: string;
 }
+
+/** Parameters for `HashiClient.requestWithdrawal()`. */
+export interface WithdrawalParams {
+    /** Amount in satoshis to withdraw. Must be ≥ the on-chain withdrawal minimum. */
+    readonly amountSats: bigint;
+    /**
+     * Recipient Bitcoin address. Bech32 for P2WPKH (`bc1q…`, `tb1q…`) or
+     * bech32m for P2TR (`bc1p…`, `tb1p…`). Decoded client-side into a witness
+     * program and must match the client's configured Bitcoin network.
+     */
+    readonly bitcoinAddress: string;
+}
+
+/** Parameters for `HashiClient.cancelWithdrawal()`. */
+export interface CancelWithdrawalParams {
+    /** 0x-prefixed 32-byte object ID of the pending withdrawal request. */
+    readonly requestId: string;
+}

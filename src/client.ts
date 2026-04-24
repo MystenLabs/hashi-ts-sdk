@@ -10,6 +10,7 @@ import type { RawTransactionArgument } from "./contracts/utils/index.js";
 import {
     generateDepositAddress as generateDepositAddressRaw,
     arkworksToSec1Compressed,
+    bitcoinAddressToWitnessProgram,
 } from "./bitcoin.js";
 import { DUST_RELAY_MIN_VALUE, NETWORK_CONFIG } from "./constants.js";
 import type { AmountViolation } from "./errors.js";
@@ -18,14 +19,16 @@ import {
     HashiConfigError,
     HashiFetchError,
     HashiPausedError,
-    InvalidDepositParamsError,
+    InvalidParamsError,
 } from "./errors.js";
 import type {
     BitcoinNetwork,
+    CancelWithdrawalParams,
     DepositParams,
     GovernanceConfig,
     HashiClientOptions,
     SuiNetwork,
+    WithdrawalParams,
 } from "./types.js";
 import { assertHex32, entry, type ConfigEntry } from "./util.js";
 
@@ -131,7 +134,7 @@ export class HashiClient {
      *   1. **Structural validation** — `txid` and `recipient` must be
      *      0x-prefixed 32-byte hex; `utxos` must be non-empty; every `vout`
      *      must be a non-negative u32 and unique within the call. Violations
-     *      throw `InvalidDepositParamsError` without any chain read.
+     *      throw `InvalidParamsError` without any chain read.
      *   2. **Pause check** — reads the governance snapshot via `view.all()`
      *      and throws `HashiPausedError` if `paused` is `true`. Mirrors the
      *      Move-side `hashi::assert_unpaused`.
@@ -184,26 +187,127 @@ export class HashiClient {
             include: { effects: true, events: true },
         });
     }
-    async withdraw() {}
+    /**
+     * Submit a BTC withdrawal request for committee processing. Burns `hBTC`
+     * from the signer's balance and enqueues a request for the committee to
+     * send `amountSats` to `bitcoinAddress` on the Bitcoin network. Signs
+     * with `signer` and submits, returning the execution result including
+     * `effects` and `events` (`WithdrawalRequestedEvent`).
+     *
+     * The method runs three preflight stages before signing:
+     *
+     *   1. **Address decoding** — `bitcoinAddress` is decoded as bech32 (v0
+     *      P2WPKH, 20 bytes) or bech32m (v1 P2TR, 32 bytes) via
+     *      `bitcoinAddressToWitnessProgram`. The HRP must match the client's
+     *      configured Bitcoin network. Violations throw
+     *      `InvalidBitcoinAddressError` with a structured `code` so callers
+     *      can distinguish a typo from a wrong-network mistake.
+     *   2. **Pause check** — reads the governance snapshot via `view.all()`
+     *      and throws `HashiPausedError` if `paused` is `true`. Mirrors the
+     *      Move-side `hashi::assert_unpaused` in `request_withdrawal`.
+     *   3. **Minimum check** — `amountSats` must be ≥
+     *      `snap.bitcoinWithdrawalMinimum`. Below-minimum throws
+     *      `AmountBelowMinimumError` with a single violation. Mirrors
+     *      `EBelowMinimumWithdrawal` in `withdraw::request_withdrawal`.
+     *
+     * For composable flows (sponsored tx, dry-run, or bundling into a
+     * larger PTB), use `tx.requestWithdrawal(options)` instead — it returns
+     * the unsigned `Transaction` and leaves signing to the caller.
+     */
+    async requestWithdrawal({
+        signer,
+        ...params
+    }: WithdrawalParams & {
+        /** Signs and pays for the resulting transaction. The signer's address becomes the tx sender. */
+        signer: Signer;
+    }) {
+        const { program } = bitcoinAddressToWitnessProgram(
+            params.bitcoinAddress,
+            this.#bitcoinNetwork,
+        );
+
+        const snap = await this.view.all();
+        if (snap.paused) {
+            throw new HashiPausedError({ operation: "withdraw" });
+        }
+        if (params.amountSats < snap.bitcoinWithdrawalMinimum) {
+            throw new AmountBelowMinimumError({
+                violations: [
+                    {
+                        amount: params.amountSats,
+                        minimum: snap.bitcoinWithdrawalMinimum,
+                    },
+                ],
+            });
+        }
+
+        const transaction = this.tx.requestWithdrawal({
+            amount: params.amountSats,
+            bitcoinAddress: program,
+        });
+        return this.#client.core.signAndExecuteTransaction({
+            signer,
+            transaction,
+            include: { effects: true, events: true },
+        });
+    }
+
+    /**
+     * Cancel a pending withdrawal request and return the locked BTC to the
+     * signer. Signs with `signer` and submits, returning the execution result.
+     *
+     * The only client-side precondition is that `requestId` is 0x-prefixed
+     * 32-byte hex. All other constraints — ownership (only the original
+     * requester can cancel), state window (cancellable only while `Requested`
+     * or `Approved`, not after committee commitment), and the on-chain
+     * `withdrawal_cancellation_cooldown_ms` — are enforced by the Move side
+     * and left to abort at execution. Pre-fetching them would cost an extra
+     * round-trip and still race chain state.
+     *
+     * Unlike `requestWithdrawal`, no pause check is performed: the Move
+     * `cancel_withdrawal` function has no `assert_unpaused`, so users can
+     * always unwind a pending request even when the system is paused.
+     *
+     * For composable flows, use `tx.cancelWithdrawal({ requestId, recipient })`.
+     */
+    async cancelWithdrawal({
+        signer,
+        requestId,
+    }: CancelWithdrawalParams & {
+        /** Signs and pays for the resulting transaction. The signer's address becomes the tx sender and the recipient of the returned BTC. */
+        signer: Signer;
+    }) {
+        assertHex32(requestId, "requestId");
+
+        const transaction = this.tx.cancelWithdrawal({
+            requestId,
+            recipient: signer.toSuiAddress(),
+        });
+        return this.#client.core.signAndExecuteTransaction({
+            signer,
+            transaction,
+            include: { effects: true, events: true },
+        });
+    }
 
     #validateDepositParams(params: DepositParams): void {
         assertHex32(params.txid, "txid");
         assertHex32(params.recipient, "recipient");
         if (params.utxos.length === 0) {
-            throw new InvalidDepositParamsError({
+            throw new InvalidParamsError({
                 reason: "`utxos` must contain at least one UTXO",
             });
         }
         const seen = new Set<number>();
         for (const { vout } of params.utxos) {
             if (!Number.isInteger(vout) || vout < 0 || vout > U32_MAX) {
-                throw new InvalidDepositParamsError({
+                throw new InvalidParamsError({
                     reason: "`vout` must be a non-negative u32 integer",
                     detail: `got ${JSON.stringify(vout)}`,
                 });
             }
             if (seen.has(vout)) {
-                throw new InvalidDepositParamsError({
+                throw new InvalidParamsError({
                     reason: "duplicate `vout` within a single deposit",
                     detail: `vout ${vout} appears more than once (each output of a single txid must be unique)`,
                 });

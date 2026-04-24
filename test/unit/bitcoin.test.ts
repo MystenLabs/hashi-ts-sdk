@@ -4,8 +4,11 @@ import {
     taprootScriptPathAddress,
     generateDepositAddress,
     arkworksToSec1Compressed,
+    bitcoinAddressToWitnessProgram,
 } from "../../src/bitcoin.js";
+import { InvalidBitcoinAddressError } from "../../src/errors.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
+import { bech32, bech32m } from "@scure/base";
 import { fromHex } from "@mysten/sui/utils";
 
 /**
@@ -183,5 +186,158 @@ describe("generateDepositAddress", () => {
         const btcAddress = generateDepositAddress(mpcKey, suiAddress, NETWORK);
 
         expect(btcAddress).toBe(EXPECTED_BTC_ADDRESS);
+    });
+});
+
+describe("bitcoinAddressToWitnessProgram", () => {
+    // BIP-173 canonical mainnet P2WPKH test vector.
+    const BIP173_P2WPKH = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+    const BIP173_PROGRAM_HEX = "751e76e8199196d454941c45d1b3a323f1433bd6";
+
+    /**
+     * Encode (hrp, version, program) into a bech32(m) SegWit address. Used to
+     * construct edge-case inputs: wrong-variant checksums, unsupported
+     * versions, mismatched program lengths. `@scure/base` doesn't enforce
+     * SegWit-specific rules (v0/20|32, version-variant coupling), so we can
+     * produce technically-invalid combinations and let the decoder reject
+     * them.
+     */
+    function encode(
+        hrp: string,
+        version: number,
+        program: Uint8Array,
+        variant: "bech32" | "bech32m",
+    ): string {
+        const codec = variant === "bech32" ? bech32 : bech32m;
+        const words = [version, ...codec.toWords(program)];
+        return codec.encode(hrp as "bc" | "tb" | "bcrt", words);
+    }
+
+    const P2WPKH_PROGRAM = new Uint8Array(20).fill(0x01);
+    const P2TR_PROGRAM = new Uint8Array(32).fill(0x02);
+
+    it("decodes a BIP-173 canonical P2WPKH mainnet address", () => {
+        const { version, program } = bitcoinAddressToWitnessProgram(BIP173_P2WPKH, "mainnet");
+        expect(version).toBe(0);
+        expect(program).toBeInstanceOf(Uint8Array);
+        expect(program.length).toBe(20);
+        expect(Buffer.from(program).toString("hex")).toBe(BIP173_PROGRAM_HEX);
+    });
+
+    it("decodes a constructed mainnet P2TR (v1, 32-byte, bech32m)", () => {
+        const addr = encode("bc", 1, P2TR_PROGRAM, "bech32m");
+        const { version, program } = bitcoinAddressToWitnessProgram(addr, "mainnet");
+        expect(version).toBe(1);
+        expect(program).toEqual(P2TR_PROGRAM);
+    });
+
+    it("decodes a signet P2TR (tb1p…)", () => {
+        const addr = encode("tb", 1, P2TR_PROGRAM, "bech32m");
+        const { version, program } = bitcoinAddressToWitnessProgram(addr, "signet");
+        expect(version).toBe(1);
+        expect(program).toEqual(P2TR_PROGRAM);
+    });
+
+    it("decodes a regtest P2WPKH (bcrt1q…)", () => {
+        const addr = encode("bcrt", 0, P2WPKH_PROGRAM, "bech32");
+        const { version, program } = bitcoinAddressToWitnessProgram(addr, "regtest");
+        expect(version).toBe(0);
+        expect(program).toEqual(P2WPKH_PROGRAM);
+    });
+
+    it("rejects garbage strings with code `malformed`", () => {
+        try {
+            bitcoinAddressToWitnessProgram("not-an-address", "mainnet");
+            expect.fail("expected to throw");
+        } catch (err) {
+            expect(err).toBeInstanceOf(InvalidBitcoinAddressError);
+            expect((err as InvalidBitcoinAddressError).code).toBe("malformed");
+            expect((err as InvalidBitcoinAddressError).address).toBe("not-an-address");
+        }
+    });
+
+    it("rejects legacy base58 addresses with code `malformed`", () => {
+        const legacy = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
+        try {
+            bitcoinAddressToWitnessProgram(legacy, "mainnet");
+            expect.fail("expected to throw");
+        } catch (err) {
+            expect(err).toBeInstanceOf(InvalidBitcoinAddressError);
+            expect((err as InvalidBitcoinAddressError).code).toBe("malformed");
+        }
+    });
+
+    it("rejects a v0 address encoded with bech32m (bad-checksum per BIP-350)", () => {
+        const addr = encode("bc", 0, P2WPKH_PROGRAM, "bech32m");
+        try {
+            bitcoinAddressToWitnessProgram(addr, "mainnet");
+            expect.fail("expected to throw");
+        } catch (err) {
+            expect(err).toBeInstanceOf(InvalidBitcoinAddressError);
+            expect((err as InvalidBitcoinAddressError).code).toBe("bad-checksum");
+        }
+    });
+
+    it("rejects a v1 address encoded with bech32 (bad-checksum per BIP-350)", () => {
+        const addr = encode("bc", 1, P2TR_PROGRAM, "bech32");
+        try {
+            bitcoinAddressToWitnessProgram(addr, "mainnet");
+            expect.fail("expected to throw");
+        } catch (err) {
+            expect(err).toBeInstanceOf(InvalidBitcoinAddressError);
+            expect((err as InvalidBitcoinAddressError).code).toBe("bad-checksum");
+        }
+    });
+
+    it("rejects a mainnet address on signet with code `wrong-network`", () => {
+        try {
+            bitcoinAddressToWitnessProgram(BIP173_P2WPKH, "signet");
+            expect.fail("expected to throw");
+        } catch (err) {
+            expect(err).toBeInstanceOf(InvalidBitcoinAddressError);
+            expect((err as InvalidBitcoinAddressError).code).toBe("wrong-network");
+        }
+    });
+
+    it("rejects witness version 2 with code `unsupported-version`", () => {
+        const addr = encode("bc", 2, P2TR_PROGRAM, "bech32m");
+        try {
+            bitcoinAddressToWitnessProgram(addr, "mainnet");
+            expect.fail("expected to throw");
+        } catch (err) {
+            expect(err).toBeInstanceOf(InvalidBitcoinAddressError);
+            expect((err as InvalidBitcoinAddressError).code).toBe("unsupported-version");
+        }
+    });
+
+    it("rejects v0 with a 32-byte program (P2WSH — not supported)", () => {
+        const addr = encode("bc", 0, P2TR_PROGRAM, "bech32");
+        try {
+            bitcoinAddressToWitnessProgram(addr, "mainnet");
+            expect.fail("expected to throw");
+        } catch (err) {
+            expect(err).toBeInstanceOf(InvalidBitcoinAddressError);
+            expect((err as InvalidBitcoinAddressError).code).toBe("bad-program-length");
+        }
+    });
+
+    it("rejects v1 with a 20-byte program", () => {
+        const addr = encode("bc", 1, P2WPKH_PROGRAM, "bech32m");
+        try {
+            bitcoinAddressToWitnessProgram(addr, "mainnet");
+            expect.fail("expected to throw");
+        } catch (err) {
+            expect(err).toBeInstanceOf(InvalidBitcoinAddressError);
+            expect((err as InvalidBitcoinAddressError).code).toBe("bad-program-length");
+        }
+    });
+
+    it("echoes the original input in `.address`", () => {
+        try {
+            bitcoinAddressToWitnessProgram("foo", "mainnet");
+            expect.fail("expected to throw");
+        } catch (err) {
+            expect((err as InvalidBitcoinAddressError).address).toBe("foo");
+        }
     });
 });
