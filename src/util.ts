@@ -22,6 +22,28 @@ export function assertHex32(value: unknown, fieldName: string): void {
 }
 
 /**
+ * Reverse the 32 bytes of a Bitcoin txid between display order (the
+ * big-endian form shown by mempool.space, blockstream.info, and
+ * `bitcoin-cli`) and internal byte order (the little-endian form Bitcoin
+ * Core stores natively, and the form `bitcoin::Txid` parses to).
+ *
+ * The Hashi committee verifier reads `Utxo.txid` from on-chain state as a
+ * `bitcoin::Txid`, so deposits must record the txid in **internal byte
+ * order**. End users hold display-order txids (everything user-facing
+ * shows that), so the SDK accepts display-order as input and reverses
+ * here before recording.
+ */
+export function reverseTxidBytes(txid: string): string {
+    assertHex32(txid, "txid");
+    const hex = txid.slice(2);
+    let reversed = "0x";
+    for (let i = hex.length - 2; i >= 0; i -= 2) {
+        reversed += hex.slice(i, i + 2);
+    }
+    return reversed;
+}
+
+/**
  * Find a VecMap entry by key and narrow its `Value` variant. Discriminating
  * on `$kind` lets TypeScript narrow the returned payload — callers get the
  * variant-specific fields (e.g. `.U64: string`, `.Bool: boolean`) without

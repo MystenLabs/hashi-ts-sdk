@@ -30,7 +30,7 @@ import type {
     SuiNetwork,
     WithdrawalParams,
 } from "./types.js";
-import { assertHex32, entry, type ConfigEntry } from "./util.js";
+import { assertHex32, entry, reverseTxidBytes, type ConfigEntry } from "./util.js";
 
 /** Max value of an unsigned 32-bit integer; vout is a u32 on the Bitcoin side. */
 const U32_MAX = 0xffffffff;
@@ -344,6 +344,14 @@ export class HashiClient {
          * All UTXOs share the `txid` because `DepositParams` has a single
          * top-level `txid` field, and are credited to the same `recipient`.
          *
+         * The `txid` is provided in **display byte order** (the form
+         * mempool.space and `bitcoin-cli` show); this method reverses it
+         * to internal byte order before recording on-chain via
+         * `reverseTxidBytes`. The committee verifier reads `Utxo.txid`
+         * as a `bitcoin::Txid`, which expects internal byte order — so
+         * recording display-order bytes leaves the committee searching
+         * for a phantom (byte-reversed) tx and the deposit never confirms.
+         *
          * @example
          * ```ts
          * const tx = client.hashi.tx.deposit({
@@ -359,11 +367,12 @@ export class HashiClient {
          */
         deposit: (params: DepositParams): Transaction => {
             const tx = new Transaction();
+            const internalTxid = reverseTxidBytes(params.txid);
             for (const { vout, amountSats } of params.utxos) {
                 const utxoId = tx.add(
                     utxoModule.utxoId({
                         package: this.#packageId,
-                        arguments: { txid: params.txid, vout },
+                        arguments: { txid: internalTxid, vout },
                     }),
                 );
                 const utxo = tx.add(

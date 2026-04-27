@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { assertHex32, entry, type ConfigEntry } from "../../src/util.js";
+import { assertHex32, entry, reverseTxidBytes, type ConfigEntry } from "../../src/util.js";
 import { HashiConfigError, InvalidParamsError } from "../../src/errors.js";
 
 describe("assertHex32", () => {
@@ -40,6 +40,39 @@ describe("assertHex32", () => {
             expect((err as InvalidParamsError).reason).toContain("`recipient`");
             expect((err as InvalidParamsError).detail).toContain('"not-hex"');
         }
+    });
+});
+
+describe("reverseTxidBytes", () => {
+    // Real fixture captured during SEDEFI-190 diagnosis: a UI deposit's
+    // user-facing (display-order) txid and the bytes that ended up on-chain
+    // when the frontend recorded it via `utxo::utxo_id`.
+    const DISPLAY = "0x043f682206d246cffdc23106820dc3aa87985a52cccd2d4275bbc3f492f71c0e";
+    const INTERNAL = "0x0e1cf792f4c3bb75422dcdcc525a9887aac30d820631c2fdcf46d20622683f04";
+
+    it("reverses display order to internal order using the real-world fixture", () => {
+        expect(reverseTxidBytes(DISPLAY)).toBe(INTERNAL);
+    });
+
+    it("is its own inverse — applying twice returns the original txid", () => {
+        expect(reverseTxidBytes(reverseTxidBytes(DISPLAY))).toBe(DISPLAY);
+    });
+
+    it("preserves a palindromic txid (sanity: trivial case still works)", () => {
+        const palindrome = `0x${"ab".repeat(32)}`;
+        expect(reverseTxidBytes(palindrome)).toBe(palindrome);
+    });
+
+    it("preserves the 0x prefix and produces 66 chars total", () => {
+        const out = reverseTxidBytes(DISPLAY);
+        expect(out.startsWith("0x")).toBe(true);
+        expect(out.length).toBe(66);
+    });
+
+    it("rejects malformed input via assertHex32", () => {
+        expect(() => reverseTxidBytes("not-hex")).toThrow(InvalidParamsError);
+        expect(() => reverseTxidBytes(`0x${"a".repeat(63)}`)).toThrow(InvalidParamsError);
+        expect(() => reverseTxidBytes("a".repeat(64))).toThrow(InvalidParamsError);
     });
 });
 
