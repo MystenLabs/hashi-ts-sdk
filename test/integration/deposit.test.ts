@@ -86,9 +86,7 @@ describe("HashiClient.deposit (signet + devnet, real network)", () => {
             const btcCoinType = `${NETWORK_CONFIG.devnet!.packageId}::btc::BTC`;
             // Snapshot pre-deposit hBTC so a re-run on a previously-funded
             // address still gates on a real *increase*, not absolute balance.
-            const balanceBefore = waitForHBtc
-                ? await fetchHBtcBalance(recipient, btcCoinType)
-                : 0n;
+            const balanceBefore = waitForHBtc ? await fetchHBtcBalance(recipient, btcCoinType) : 0n;
 
             const result = await client.hashi.deposit({
                 signer,
