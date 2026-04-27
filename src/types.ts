@@ -51,7 +51,12 @@ export interface UtxoOutput {
 
 /** Parameters for `HashiClient.deposit()` — one Bitcoin txid, one or more outputs paying the deposit address. */
 export interface DepositParams {
-    /** 0x-prefixed 32-byte Bitcoin txid of the funding transaction. */
+    /**
+     * 0x-prefixed 32-byte Bitcoin txid of the funding transaction, in
+     * **display byte order** — the form mempool.space, blockstream.info,
+     * and `bitcoin-cli` show. The SDK reverses to internal byte order
+     * before recording on-chain (see `reverseTxidBytes` in `util.ts`).
+     */
     readonly txid: string;
     /** UTXOs from `txid` that paid the deposit address (one per output to the address). */
     readonly utxos: readonly UtxoOutput[];
