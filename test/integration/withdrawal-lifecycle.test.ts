@@ -27,7 +27,8 @@ import {
  * separately, with operator-driven waits in between.
  */
 
-const LOCALNET_HBTC_TIMEOUT_MS = 60_000;
+// See deposit.test.ts for why 180 s — Kyoto BIP-157 warmup on cold CI.
+const LOCALNET_HBTC_TIMEOUT_MS = 180_000;
 const LOCALNET_HBTC_INTERVAL_MS = 2_000;
 const COOLDOWN_BUDGET_MS = 30_000;
 
@@ -125,7 +126,11 @@ describe.skipIf(!isLocalnet())("HashiClient withdrawal lifecycle (localnet)", ()
         );
         expect(evt).toBeDefined();
 
-        const parsed = (evt as unknown as { parsedJson?: { request_id?: string } }).parsedJson;
+        // The gRPC client (`@mysten/sui/grpc`) surfaces parsed Move event
+        // data under `event.json`, not the JSON-RPC-era `event.parsedJson`.
+        // Mixing the two silently returns undefined and looks like the
+        // event was malformed.
+        const parsed = (evt as unknown as { json?: { request_id?: string } }).json;
         if (!parsed?.request_id) {
             throw new Error(`WithdrawalRequestedEvent missing request_id: ${JSON.stringify(evt)}`);
         }
