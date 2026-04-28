@@ -1,0 +1,178 @@
+name: Integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  localnet-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      LOCALNET_DATA_DIR: ${{ github.workspace }}/.hashi/localnet
+      LOCALNET_LOG: ${{ github.workspace }}/localnet.log
+    steps:
+      - name: Checkout (with hashi submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Record hashi pin in step summary
+        run: |
+          PIN=$(git -C hashi rev-parse HEAD)
+          echo "Hashi submodule pin: \`$PIN\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "HASHI_PIN=$PIN" >> "$GITHUB_ENV"
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      # `hashi/rust-toolchain.toml` pins 1.91 — match it so cargo doesn't
+      # auto-install a second toolchain inside the build step (slower and
+      # uncached).
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.91"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: hashi -> hashi/target
+          # Bumping the submodule should bust the cache. `Swatinem/rust-cache`
+          # already keys on Cargo.lock; the explicit submodule SHA in the key
+          # makes the relationship unambiguous in cache hit/miss logs.
+          shared-key: hashi-${{ env.HASHI_PIN }}
+
+      - name: Install Sui binary
+        run: bash hashi/.github/scripts/install-sui.sh
+
+      # Mirrors the "Install Bitcoin Core" step in
+      # hashi/.github/workflows/ci.yml. Vendored verbatim because hashi-core
+      # has it inline (no install-bitcoin.sh to reuse). Revisit if hashi
+      # extracts a script.
+      - name: Install Bitcoin Core
+        env:
+          FALLBACK_VERSION: "29.1"
+        run: |
+          echo "Detecting latest Bitcoin Core version..."
+          BITCOIN_VERSION=$(curl -s https://api.github.com/repos/bitcoin/bitcoin/releases/latest | \
+            sed -n 's/.*"tag_name": "v\([^"]*\)".*/\1/p' || echo "$FALLBACK_VERSION")
+
+          if [ -z "$BITCOIN_VERSION" ]; then
+            echo "Failed to detect version, using fallback: $FALLBACK_VERSION"
+            BITCOIN_VERSION="$FALLBACK_VERSION"
+          fi
+
+          echo "Installing Bitcoin Core v${BITCOIN_VERSION}..."
+
+          wget -q https://bitcoincore.org/bin/bitcoin-core-${BITCOIN_VERSION}/bitcoin-${BITCOIN_VERSION}-x86_64-linux-gnu.tar.gz || {
+            echo "Download failed for ${BITCOIN_VERSION}; falling back to ${FALLBACK_VERSION}"
+            BITCOIN_VERSION="$FALLBACK_VERSION"
+            wget -q https://bitcoincore.org/bin/bitcoin-core-${BITCOIN_VERSION}/bitcoin-${BITCOIN_VERSION}-x86_64-linux-gnu.tar.gz
+          }
+
+          tar -xzf bitcoin-${BITCOIN_VERSION}-x86_64-linux-gnu.tar.gz
+          sudo mv bitcoin-${BITCOIN_VERSION}/bin/bitcoind /usr/local/bin/
+          sudo mv bitcoin-${BITCOIN_VERSION}/bin/bitcoin-cli /usr/local/bin/
+          rm -rf bitcoin-${BITCOIN_VERSION}-x86_64-linux-gnu.tar.gz bitcoin-${BITCOIN_VERSION}/
+
+          bitcoind --version | head -n1
+
+      - name: Build hashi-localnet binary
+        working-directory: hashi
+        run: cargo build --release --bin hashi-localnet -p e2e-tests
+
+      - name: Start hashi-localnet (background)
+        run: |
+          mkdir -p "$LOCALNET_DATA_DIR"
+          nohup hashi/target/release/hashi-localnet start \
+            --num-validators 4 \
+            --sui-rpc-port 9000 \
+            --btc-rpc-port 18443 \
+            --data-dir "$LOCALNET_DATA_DIR" \
+            --verbose \
+            > "$LOCALNET_LOG" 2>&1 &
+          echo $! > "$LOCALNET_DATA_DIR/runner.pid"
+          echo "hashi-localnet PID: $(cat $LOCALNET_DATA_DIR/runner.pid)"
+
+      - name: Wait for localnet readiness
+        run: |
+          set -euo pipefail
+          echo "Phase 1/2: waiting for state.json (cap 5 min)…"
+          for i in $(seq 1 60); do
+            if [[ -f "$LOCALNET_DATA_DIR/state.json" ]]; then
+              echo "state.json appeared after ~$((i * 5)) s"
+              break
+            fi
+            sleep 5
+          done
+          if [[ ! -f "$LOCALNET_DATA_DIR/state.json" ]]; then
+            echo "::error::state.json never appeared — localnet failed to bootstrap"
+            tail -n 200 "$LOCALNET_LOG"
+            exit 1
+          fi
+
+          OBJ=$(jq -r .hashi_object_id "$LOCALNET_DATA_DIR/state.json")
+          echo "Phase 2/2: polling Hashi object $OBJ for non-empty MPC key (cap 3 min)…"
+          for i in $(seq 1 36); do
+            LEN=$(curl -s -X POST http://127.0.0.1:9000 \
+              -H content-type:application/json \
+              -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"sui_getObject\",\"params\":[\"$OBJ\",{\"showContent\":true}]}" \
+              | jq -r '.result.data.content.fields.committee_set.fields.mpc_public_key | length' 2>/dev/null || echo 0)
+            if [[ "$LEN" -gt 0 ]]; then
+              echo "MPC key on chain (length=$LEN) after ~$((i * 5)) s — DKG settled."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::DKG did not settle within budget; MPC key still empty"
+          tail -n 200 "$LOCALNET_LOG"
+          exit 1
+
+      - name: Export integration-test env
+        run: |
+          STATE="$LOCALNET_DATA_DIR/state.json"
+          {
+            echo "HASHI_E2E_SUI_RPC_URL=$(jq -r .sui_rpc_url $STATE)"
+            echo "HASHI_E2E_SUI_NETWORK=localnet"
+            echo "HASHI_E2E_PACKAGE_ID=$(jq -r .package_id $STATE)"
+            echo "HASHI_E2E_HASHI_OBJECT_ID=$(jq -r .hashi_object_id $STATE)"
+            echo "HASHI_E2E_BITCOIN_NETWORK=regtest"
+            echo "HASHI_E2E_FUNDED_KEY_PEM=$(jq -r .funded_sui_keypair_path $STATE)"
+            echo "HASHI_E2E_LOCALNET_BIN=${{ github.workspace }}/hashi/target/release/hashi-localnet"
+            echo "HASHI_E2E_LOCALNET_DATA_DIR=$LOCALNET_DATA_DIR"
+            echo "HASHI_E2E_BTC_RPC_URL=$(jq -r .btc_rpc_url $STATE)"
+            echo "HASHI_E2E_BTC_RPC_USER=$(jq -r .btc_rpc_user $STATE)"
+            echo "HASHI_E2E_BTC_RPC_PASS=$(jq -r .btc_rpc_password $STATE)"
+          } >> "$GITHUB_ENV"
+
+      - name: Install pnpm dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run integration tests
+        run: pnpm test:integration
+
+      - name: Upload localnet logs and state on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: localnet-logs
+          path: |
+            ${{ env.LOCALNET_LOG }}
+            ${{ env.LOCALNET_DATA_DIR }}/state.json
+            ${{ env.LOCALNET_DATA_DIR }}/hashi-cli.toml
+          if-no-files-found: ignore
+
+      - name: Stop hashi-localnet
+        if: always()
+        run: |
+          hashi/target/release/hashi-localnet stop \
+            --data-dir "$LOCALNET_DATA_DIR" || true

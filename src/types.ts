@@ -1,6 +1,6 @@
 export type BitcoinNetwork = "mainnet" | "testnet" | "signet" | "regtest";
 
-export type SuiNetwork = "devnet" | "testnet" | "mainnet";
+export type SuiNetwork = "devnet" | "testnet" | "mainnet" | "localnet";
 
 export interface NetworkConfig {
     hashiObjectId: string;

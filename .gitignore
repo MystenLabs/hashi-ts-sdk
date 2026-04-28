@@ -34,3 +34,7 @@ coverage/
 # OS specific
 Thumbs.db
 ./hashi
+
+# hashi-localnet runtime state (written by `hashi-localnet start`)
+.hashi/
+localnet.log

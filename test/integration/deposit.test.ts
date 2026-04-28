@@ -1,92 +1,128 @@
 import { describe, it, expect } from "vitest";
-import { SuiGrpcClient } from "@mysten/sui/grpc";
-import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
-import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
-import { hashi } from "../../src/client.js";
-import { NETWORK_CONFIG } from "../../src/constants.js";
+import {
+    btcCoinType,
+    fetchCoinBalance,
+    freshFundedSigner,
+    fundDepositOnLocalnet,
+    isLocalnet,
+    makeClient,
+    makeSigner,
+    suiRpcUrl,
+    waitForCoinBalance,
+} from "./_env.js";
 
 /**
- * Real-network deposit smoke test — Sui devnet submission against an
- * already-funded signet UTXO.
+ * Real-network deposit smoke test. Two execution targets, same assertions:
  *
- * UTXO details are supplied via env vars so the test has no live
- * mempool.space dependency. To run locally:
+ *  - **devnet** (default): submits the env-configured signet UTXO to Sui
+ *    devnet. Polling hBTC arrival is opt-in (`HASHI_E2E_WAIT_FOR_HBTC=1`)
+ *    because committee latency on devnet varies (8 min – 1.5 h).
+ *  - **localnet** (`HASHI_E2E_SUI_NETWORK=localnet`, set by CI): derives a
+ *    deposit address, sends real BTC to it via `bitcoin-cli`, mines enough
+ *    confirmations, captures the resulting txid/vout, then submits via the
+ *    SDK and asserts hBTC arrival within ~60 s. The full contract — submit
+ *    + committee verify + mint — is exactly what SEDEFI-190 (txid byte-order
+ *    bug) silently violated for weeks; this lane is the regression backstop.
  *
- *   1. Derive the BTC deposit address for your Sui address and fund it on
- *      signet. Wait for the tx to confirm (≈10 min per block).
- *   2. Populate `.env` at the project root:
- *        HASHI_E2E_SUI_PRIVATE_KEY=suiprivkey1…
- *        HASHI_E2E_BTC_TXID=<64-char hex, no 0x prefix>
- *        HASHI_E2E_BTC_VOUT=<integer>
- *        HASHI_E2E_BTC_AMOUNT_SATS=<integer>
- *   3. `pnpm test:integration`
- *
- * Set `HASHI_E2E_WAIT_FOR_HBTC=1` to additionally poll the recipient's hBTC
- * balance after submission and assert that the committee mints. Off by
- * default because committee latency varies (8 min – 1.5 h on devnet) and the
- * extra wait would dominate routine runs. On — locks in that Move event
- * emission also implies on-chain hBTC arrival, which is the post-condition
- * SEDEFI-190 (txid byte-order bug) silently violated for weeks.
+ * For local devnet runs, populate `.env`:
+ *   HASHI_E2E_SUI_PRIVATE_KEY=suiprivkey1…
+ *   HASHI_E2E_BTC_TXID=<64-char hex, no 0x prefix>
+ *   HASHI_E2E_BTC_VOUT=<integer>
+ *   HASHI_E2E_BTC_AMOUNT_SATS=<integer>
+ * then `pnpm test:integration`.
  */
-// Fail loudly at module load if any env var is missing — otherwise vitest
-// reports "0 failed" and exits 0, which previously masked a .env that wasn't
-// being picked up.
-const TEST_PK = process.env.HASHI_E2E_SUI_PRIVATE_KEY;
-const TEST_TXID = process.env.HASHI_E2E_BTC_TXID;
-const TEST_VOUT = process.env.HASHI_E2E_BTC_VOUT;
-const TEST_AMOUNT_SATS = process.env.HASHI_E2E_BTC_AMOUNT_SATS;
-if (!TEST_PK || !TEST_TXID || !TEST_VOUT || !TEST_AMOUNT_SATS) {
-    throw new Error(
-        "Set HASHI_E2E_SUI_PRIVATE_KEY, HASHI_E2E_BTC_TXID, HASHI_E2E_BTC_VOUT, " +
-            "and HASHI_E2E_BTC_AMOUNT_SATS in `.env` at the project root (or " +
-            "export them) before running `pnpm test:integration`.",
-    );
-}
 
-const RPC_URL = "https://fullnode.devnet.sui.io:443";
 const HBTC_POLL_INTERVAL_MS = 30_000;
-const HBTC_POLL_TIMEOUT_MS = 15 * 60_000;
+const DEVNET_HBTC_TIMEOUT_MS = 15 * 60_000;
+const LOCALNET_HBTC_TIMEOUT_MS = 60_000;
+const LOCALNET_HBTC_INTERVAL_MS = 2_000;
 
-/**
- * Read the recipient's hBTC balance via the JSON-RPC fallback on the gRPC
- * endpoint — keeps this test free of the codegen-typed coin queries and
- * avoids dragging the full client into a polling loop.
- */
-async function fetchHBtcBalance(recipient: string, btcCoinType: string): Promise<bigint> {
-    const resp = await fetch(RPC_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: 1,
-            method: "suix_getBalance",
-            params: [recipient, btcCoinType],
-        }),
-    });
-    const data = (await resp.json()) as { result?: { totalBalance?: string } };
-    return BigInt(data.result?.totalBalance ?? "0");
-}
+describe("HashiClient.deposit (real network)", () => {
+    if (isLocalnet()) {
+        it(
+            "fund regtest deposit address, submit via SDK, and verify hBTC arrival",
+            async () => {
+                const client = makeClient();
+                // Fresh signer per test so concurrent test files don't share a
+                // sender — eliminates gas-object races and hBTC cross-talk
+                // between deposit.test.ts and withdrawal-lifecycle.test.ts.
+                const signer = await freshFundedSigner();
+                const recipient = signer.toSuiAddress();
 
-describe("HashiClient.deposit (signet + devnet, real network)", () => {
+                // A fresh signer starts with zero hBTC, so this is 0n by
+                // construction. Read it anyway to keep the assertion shape
+                // identical to the devnet path and resilient against any
+                // future change that pre-funds new signers with hBTC.
+                const balanceBefore = await fetchCoinBalance(suiRpcUrl(), recipient, btcCoinType());
+
+                const { funded } = await fundDepositOnLocalnet(client, recipient);
+
+                const result = await client.hashi.deposit({
+                    signer,
+                    txid: funded.txid,
+                    utxos: [{ vout: funded.vout, amountSats: funded.amountSats }],
+                    recipient,
+                });
+
+                expect(result.$kind).toBe("Transaction");
+                if (result.$kind !== "Transaction") {
+                    throw new Error(
+                        `Transaction failed: ${JSON.stringify(result.FailedTransaction)}`,
+                    );
+                }
+                expect(result.Transaction.status.success).toBe(true);
+
+                const evt = result.Transaction.events?.find((e) =>
+                    e.eventType.endsWith("::deposit::DepositRequestedEvent"),
+                );
+                expect(evt).toBeDefined();
+
+                const target = balanceBefore + funded.amountSats;
+                const final = await waitForCoinBalance(
+                    suiRpcUrl(),
+                    recipient,
+                    btcCoinType(),
+                    target,
+                    {
+                        timeoutMs: LOCALNET_HBTC_TIMEOUT_MS,
+                        intervalMs: LOCALNET_HBTC_INTERVAL_MS,
+                    },
+                );
+                expect(final).toBeGreaterThanOrEqual(target);
+            },
+            LOCALNET_HBTC_TIMEOUT_MS + 60_000,
+        );
+        return;
+    }
+
+    // Devnet path — env-configured signet UTXO. Fail loudly at module load
+    // if any var is missing so a misconfigured `.env` doesn't masquerade as
+    // a clean run with zero tests.
+    const TEST_TXID = process.env.HASHI_E2E_BTC_TXID;
+    const TEST_VOUT = process.env.HASHI_E2E_BTC_VOUT;
+    const TEST_AMOUNT_SATS = process.env.HASHI_E2E_BTC_AMOUNT_SATS;
+    if (!process.env.HASHI_E2E_SUI_PRIVATE_KEY || !TEST_TXID || !TEST_VOUT || !TEST_AMOUNT_SATS) {
+        throw new Error(
+            "Set HASHI_E2E_SUI_PRIVATE_KEY, HASHI_E2E_BTC_TXID, HASHI_E2E_BTC_VOUT, " +
+                "and HASHI_E2E_BTC_AMOUNT_SATS in `.env` (or run with " +
+                "HASHI_E2E_SUI_NETWORK=localnet for the localnet flow).",
+        );
+    }
+
     const waitForHBtc = process.env.HASHI_E2E_WAIT_FOR_HBTC === "1";
-    const testTimeoutMs = waitForHBtc ? HBTC_POLL_TIMEOUT_MS + 60_000 : 120_000;
+    const testTimeoutMs = waitForHBtc ? DEVNET_HBTC_TIMEOUT_MS + 60_000 : 120_000;
 
     it(
         "submits a real deposit for the configured signet UTXO and emits DepositRequestedEvent",
         async () => {
-            const signer = Ed25519Keypair.fromSecretKey(decodeSuiPrivateKey(TEST_PK).secretKey);
+            const client = makeClient();
+            const signer = makeSigner();
             const recipient = signer.toSuiAddress();
             const amountSats = BigInt(TEST_AMOUNT_SATS);
 
-            const client = new SuiGrpcClient({
-                network: "devnet",
-                baseUrl: RPC_URL,
-            }).$extend(hashi({ network: "devnet" }));
-
-            const btcCoinType = `${NETWORK_CONFIG.devnet!.packageId}::btc::BTC`;
-            // Snapshot pre-deposit hBTC so a re-run on a previously-funded
-            // address still gates on a real *increase*, not absolute balance.
-            const balanceBefore = waitForHBtc ? await fetchHBtcBalance(recipient, btcCoinType) : 0n;
+            const balanceBefore = waitForHBtc
+                ? await fetchCoinBalance(suiRpcUrl(), recipient, btcCoinType())
+                : 0n;
 
             const result = await client.hashi.deposit({
                 signer,
@@ -95,7 +131,6 @@ describe("HashiClient.deposit (signet + devnet, real network)", () => {
                 recipient,
             });
 
-            // Discriminated union — a failed execution lands under FailedTransaction.
             expect(result.$kind).toBe("Transaction");
             if (result.$kind !== "Transaction") {
                 throw new Error(`Transaction failed: ${JSON.stringify(result.FailedTransaction)}`);
@@ -110,15 +145,15 @@ describe("HashiClient.deposit (signet + devnet, real network)", () => {
             if (!waitForHBtc) return;
 
             const target = balanceBefore + amountSats;
-            const deadline = Date.now() + HBTC_POLL_TIMEOUT_MS;
+            const deadline = Date.now() + DEVNET_HBTC_TIMEOUT_MS;
             // eslint-disable-next-line no-console
             console.log(
                 `[deposit.test] waiting for hBTC at ${recipient}: ` +
                     `before=${balanceBefore}, target=${target}, ` +
-                    `timeout=${HBTC_POLL_TIMEOUT_MS / 60_000} min`,
+                    `timeout=${DEVNET_HBTC_TIMEOUT_MS / 60_000} min`,
             );
             for (;;) {
-                const current = await fetchHBtcBalance(recipient, btcCoinType);
+                const current = await fetchCoinBalance(suiRpcUrl(), recipient, btcCoinType());
                 if (current >= target) {
                     // eslint-disable-next-line no-console
                     console.log(`[deposit.test] hBTC arrived: balance=${current}`);
@@ -127,7 +162,7 @@ describe("HashiClient.deposit (signet + devnet, real network)", () => {
                 }
                 if (Date.now() >= deadline) {
                     throw new Error(
-                        `hBTC did not arrive within ${HBTC_POLL_TIMEOUT_MS / 60_000} min — ` +
+                        `hBTC did not arrive within ${DEVNET_HBTC_TIMEOUT_MS / 60_000} min — ` +
                             `recipient=${recipient}, before=${balanceBefore}, ` +
                             `target=${target}, last=${current}. ` +
                             `Most likely the committee couldn't verify the deposit ` +
