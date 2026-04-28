@@ -108,6 +108,11 @@ export function makeSigner(): Ed25519Keypair {
  * Invokes the `hashi-localnet` Rust CLI from the submodule. The CI workflow
  * sets `HASHI_E2E_LOCALNET_BIN` to its absolute path and `HASHI_E2E_LOCALNET_DATA_DIR`
  * to the state dir; we always inject `--data-dir` so callers can't forget it.
+ *
+ * `--data-dir` is a *per-subcommand* flag in clap (each of `start`, `stop`,
+ * `mine`, `faucet-sui`, `faucet-btc`, `deposit`, … defines its own), not a
+ * top-level flag — so it must appear *after* the subcommand. Putting it
+ * before the subcommand fails with `error: unexpected argument '--data-dir'`.
  */
 export async function localnetCli(args: string[]): Promise<{ stdout: string; stderr: string }> {
     const bin = process.env.HASHI_E2E_LOCALNET_BIN;
@@ -117,7 +122,11 @@ export async function localnetCli(args: string[]): Promise<{ stdout: string; std
             "HASHI_E2E_LOCALNET_BIN and HASHI_E2E_LOCALNET_DATA_DIR must be set on localnet",
         );
     }
-    return execFileAsync(bin, ["--data-dir", dataDir, ...args]);
+    if (args.length === 0) {
+        throw new Error("localnetCli requires at least a subcommand");
+    }
+    const [subcommand, ...rest] = args;
+    return execFileAsync(bin, [subcommand, "--data-dir", dataDir, ...rest]);
 }
 
 interface BtcRpcOptions {
