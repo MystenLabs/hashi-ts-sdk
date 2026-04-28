@@ -61,6 +61,16 @@ export default defineConfig({
                     include: ["test/integration/**/*.test.ts"],
                     testTimeout: 30_000,
                     env: integrationEnv,
+                    // Run integration test files one at a time. Even with
+                    // per-test fresh-signer isolation, the localnet
+                    // committee processes deposits with limited concurrency
+                    // — two parallel `client.hashi.deposit()` calls had one
+                    // settle and the other stall indefinitely (validators
+                    // detected the request but never advanced past
+                    // detection; see PR #11 CI run). Sequential execution
+                    // sidesteps the validator-side race; cost is small
+                    // (4 files, most fast) and reliability dominates.
+                    fileParallelism: false,
                 },
             },
         ],
