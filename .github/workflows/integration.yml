@@ -93,8 +93,15 @@ jobs:
       - name: Start hashi-localnet (background)
         run: |
           mkdir -p "$LOCALNET_DATA_DIR"
+          # 6 validators tolerates 2 simultaneous failures vs 1 with 4
+          # (threshold is 6666/10000 ≈ ⅔). PR #11 CI run 25057025192 lost
+          # quorum at 2/4 timeouts during Kyoto BIP-157 warmup; 2/6 leaves
+          # 4 validators (6666 weight) — exactly the threshold floor. If
+          # failures stay independent, this clears them; if they're
+          # correlated (host CPU/IO starvation), bumping N won't help and
+          # we'll need to pre-warm or scope back the integration tests.
           nohup hashi/target/release/hashi-localnet start \
-            --num-validators 4 \
+            --num-validators 6 \
             --sui-rpc-port 9000 \
             --btc-rpc-port 18443 \
             --data-dir "$LOCALNET_DATA_DIR" \
