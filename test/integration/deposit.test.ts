@@ -34,13 +34,14 @@ import {
 
 const HBTC_POLL_INTERVAL_MS = 30_000;
 const DEVNET_HBTC_TIMEOUT_MS = 15 * 60_000;
-// 180 s tolerates Kyoto BIP-157 light-client peer-discovery + sync warmup
-// on a cold CI runner. Empirically, the validator's "Deposit request
-// detected" → "Processing" gap is ~60 s on the first deposit because
-// Kyoto needs to peer with bitcoind and back-fill block filters; once
-// warm, subsequent deposits flush in <10 s. See PR #11 CI run
-// 25054799500 logs for the timeline.
-const LOCALNET_HBTC_TIMEOUT_MS = 180_000;
+// 300 s tolerates Kyoto BIP-157 light-client peer-discovery + sync warmup
+// on a cold CI runner. Empirically the "Deposit request detected" →
+// "Processing" gap is ~180 s on the first deposit (validators block on
+// Kyoto peering with bitcoind and back-filling block filters); once warm,
+// subsequent deposits flush in <5 s. PR #11 CI run 25059655658 had
+// detection→confirmation take 184 s and missed a 180 s SDK budget by 4 s.
+// 300 s gives ~2× headroom over the observed steady warmup.
+const LOCALNET_HBTC_TIMEOUT_MS = 300_000;
 const LOCALNET_HBTC_INTERVAL_MS = 2_000;
 
 describe("HashiClient.deposit (real network)", () => {

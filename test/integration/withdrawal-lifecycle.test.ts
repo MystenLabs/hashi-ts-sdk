@@ -27,8 +27,8 @@ import {
  * separately, with operator-driven waits in between.
  */
 
-// See deposit.test.ts for why 180 s — Kyoto BIP-157 warmup on cold CI.
-const LOCALNET_HBTC_TIMEOUT_MS = 180_000;
+// See deposit.test.ts for why 300 s — Kyoto BIP-157 warmup on cold CI.
+const LOCALNET_HBTC_TIMEOUT_MS = 300_000;
 const LOCALNET_HBTC_INTERVAL_MS = 2_000;
 const COOLDOWN_BUDGET_MS = 30_000;
 
