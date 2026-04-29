@@ -9,6 +9,7 @@ import {
     isLocalnet,
     makeClient,
     waitForCoinBalance,
+    waitForCoinBalanceExact,
     type ExtendedHashiClient,
 } from "./_env.js";
 
@@ -136,11 +137,14 @@ describe.skipIf(!isLocalnet())("HashiClient withdrawal lifecycle (localnet)", ()
         state.requestId = parsed.request_id;
 
         // Sanity: hBTC is locked at request time — balance should drop by
-        // exactly the requested amount once the request lands. Reads via
-        // gRPC so the post-tx state is visible immediately (JSON-RPC's
-        // index lags committed checkpoints by a few hundred ms on localnet).
-        const after = await fetchCoinBalance(state.client, state.recipient, btcCoinType());
-        expect(after).toBe(state.balanceAfterDeposit - state.withdrawAmountSats);
+        // exactly the requested amount once the request lands. The balance
+        // index updates a beat after `signAndExecuteTransaction` returns,
+        // so we poll until it matches rather than reading once.
+        const expected = state.balanceAfterDeposit - state.withdrawAmountSats;
+        await waitForCoinBalanceExact(state.client, state.recipient, btcCoinType(), expected, {
+            timeoutMs: 5_000,
+            intervalMs: 100,
+        });
     }, 60_000);
 
     it(
@@ -180,9 +184,15 @@ describe.skipIf(!isLocalnet())("HashiClient withdrawal lifecycle (localnet)", ()
             expect(evt).toBeDefined();
 
             // Balance must return to the post-deposit value: cancel unlocks
-            // exactly what request locked.
-            const after = await fetchCoinBalance(state.client, state.recipient, btcCoinType());
-            expect(after).toBe(state.balanceAfterDeposit);
+            // exactly what request locked. Same balance-index lag as the
+            // request step, so poll for equality.
+            await waitForCoinBalanceExact(
+                state.client,
+                state.recipient,
+                btcCoinType(),
+                state.balanceAfterDeposit,
+                { timeoutMs: 5_000, intervalMs: 100 },
+            );
         },
         COOLDOWN_BUDGET_MS + 60_000,
     );

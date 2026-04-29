@@ -84,16 +84,10 @@ describe("HashiClient.deposit (real network)", () => {
                 expect(evt).toBeDefined();
 
                 const target = balanceBefore + funded.amountSats;
-                const final = await waitForCoinBalance(
-                    client,
-                    recipient,
-                    btcCoinType(),
-                    target,
-                    {
-                        timeoutMs: LOCALNET_HBTC_TIMEOUT_MS,
-                        intervalMs: LOCALNET_HBTC_INTERVAL_MS,
-                    },
-                );
+                const final = await waitForCoinBalance(client, recipient, btcCoinType(), target, {
+                    timeoutMs: LOCALNET_HBTC_TIMEOUT_MS,
+                    intervalMs: LOCALNET_HBTC_INTERVAL_MS,
+                });
                 expect(final).toBeGreaterThanOrEqual(target);
             },
             LOCALNET_HBTC_TIMEOUT_MS + 60_000,

@@ -292,3 +292,31 @@ export async function waitForCoinBalance(
         await new Promise((resolve) => setTimeout(resolve, opts.intervalMs));
     }
 }
+
+/**
+ * Polls until the balance equals `expected` exactly. Use after a transaction
+ * that should leave a known balance (e.g. the post-`requestWithdrawal` lock)
+ * — Sui's balance index updates a beat after `signAndExecuteTransaction`
+ * returns, so a same-tick read can briefly return the pre-tx value.
+ */
+export async function waitForCoinBalanceExact(
+    client: ExtendedHashiClient,
+    address: string,
+    coinType: string,
+    expected: bigint,
+    opts: { timeoutMs: number; intervalMs: number },
+): Promise<bigint> {
+    const deadline = Date.now() + opts.timeoutMs;
+    let last = 0n;
+    for (;;) {
+        last = await fetchCoinBalance(client, address, coinType);
+        if (last === expected) return last;
+        if (Date.now() >= deadline) {
+            throw new Error(
+                `coin balance did not reach ${expected} within ${opts.timeoutMs} ms — ` +
+                    `address=${address}, coin=${coinType}, last=${last}`,
+            );
+        }
+        await new Promise((resolve) => setTimeout(resolve, opts.intervalMs));
+    }
+}
