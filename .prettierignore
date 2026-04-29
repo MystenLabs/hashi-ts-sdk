@@ -1,2 +1,5 @@
 dist
 CHANGELOG.md
+hashi
+pnpm-lock.yaml
+packages/hashi/src/contracts
