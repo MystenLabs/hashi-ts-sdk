@@ -211,8 +211,46 @@ jobs:
       - name: Install pnpm dependencies
         run: pnpm install --frozen-lockfile
 
+      # Kyoto BIP-157 polls bitcoind for new headers only every ~5 min when
+      # idle (no live block production on regtest). PR #11 run 25099701367
+      # showed validators stuck at tip 108 for 5 min after the deposit test
+      # mined to 115, missing the SDK's 300 s budget by 2 s. Mining one
+      # regtest block every 20 s keeps Kyoto's header stream warm so
+      # deposits confirm in seconds instead of waiting for the next poll.
+      # Tests don't depend on absolute block height — only on having
+      # `confirmation_threshold + 1` blocks past their funding tx, which
+      # they mine themselves.
+      - name: Start bitcoind block heartbeat
+        run: |
+          ADDR=$(curl -s --user "$HASHI_E2E_BTC_RPC_USER:$HASHI_E2E_BTC_RPC_PASS" \
+            -H content-type:application/json \
+            --data '{"jsonrpc":"1.0","id":1,"method":"getnewaddress","params":[]}' \
+            "$HASHI_E2E_BTC_RPC_URL/wallet/test" | jq -r .result)
+          if [[ -z "$ADDR" || "$ADDR" == "null" ]]; then
+            echo "::error::Could not obtain a regtest address for the heartbeat"
+            exit 1
+          fi
+          nohup bash -c "
+            while true; do
+              curl -s --user '$HASHI_E2E_BTC_RPC_USER:$HASHI_E2E_BTC_RPC_PASS' \
+                -H content-type:application/json \
+                --data '{\"jsonrpc\":\"1.0\",\"id\":1,\"method\":\"generatetoaddress\",\"params\":[1, \"$ADDR\"]}' \
+                '$HASHI_E2E_BTC_RPC_URL' > /dev/null
+              sleep 20
+            done
+          " > /dev/null 2>&1 &
+          echo $! > /tmp/btc-heartbeat.pid
+          echo "btc-heartbeat PID: $(cat /tmp/btc-heartbeat.pid) mining to $ADDR every 20s"
+
       - name: Run integration tests
         run: pnpm test:integration
+
+      - name: Stop bitcoind block heartbeat
+        if: always()
+        run: |
+          if [[ -f /tmp/btc-heartbeat.pid ]]; then
+            kill "$(cat /tmp/btc-heartbeat.pid)" 2>/dev/null || true
+          fi
 
       - name: Upload localnet logs and state on failure
         if: failure()

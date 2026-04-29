@@ -167,32 +167,22 @@ export async function btcRpc<T = unknown>(
 }
 
 /**
- * Fetches a Sui address's balance of a given coin type via JSON-RPC fallback
- * on the gRPC endpoint. Mirrors the helper that `deposit.test.ts` previously
- * inlined; refactored here so the deposit and withdrawal-lifecycle tests share
- * one code path.
+ * Fetches a Sui address's balance of a given coin type via the gRPC client.
+ *
+ * Uses gRPC `state.getBalance` rather than JSON-RPC `suix_getBalance` so a
+ * read issued immediately after a `signAndExecuteTransaction` returns the
+ * post-tx state. The JSON-RPC indexer can lag a committed checkpoint by a
+ * few hundred milliseconds on localnet — long enough for the previous
+ * implementation to fail withdrawal-lifecycle's "balance dropped after
+ * requestWithdrawal" assertion (PR #11 run 25099701367).
  */
 export async function fetchCoinBalance(
-    rpcUrl: string,
+    client: ExtendedHashiClient,
     address: string,
     coinType: string,
 ): Promise<bigint> {
-    const resp = await fetch(rpcUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: 1,
-            method: "suix_getBalance",
-            params: [address, coinType],
-        }),
-    });
-    const data = (await resp.json()) as { result?: { totalBalance?: string } };
-    return BigInt(data.result?.totalBalance ?? "0");
-}
-
-export function suiRpcUrl(): string {
-    return process.env.HASHI_E2E_SUI_RPC_URL ?? DEFAULT_DEVNET_RPC;
+    const { balance } = await client.core.getBalance({ owner: address, coinType });
+    return BigInt(balance.balance);
 }
 
 /** Default per-test SUI gas allocation: 1000 SUI in MIST. Plenty of headroom. */
@@ -282,7 +272,7 @@ export async function fundDepositOnLocalnet(
  * the last observed value on timeout.
  */
 export async function waitForCoinBalance(
-    rpcUrl: string,
+    client: ExtendedHashiClient,
     address: string,
     coinType: string,
     target: bigint,
@@ -291,7 +281,7 @@ export async function waitForCoinBalance(
     const deadline = Date.now() + opts.timeoutMs;
     let last = 0n;
     for (;;) {
-        last = await fetchCoinBalance(rpcUrl, address, coinType);
+        last = await fetchCoinBalance(client, address, coinType);
         if (last >= target) return last;
         if (Date.now() >= deadline) {
             throw new Error(

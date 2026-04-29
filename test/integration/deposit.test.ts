@@ -7,7 +7,6 @@ import {
     isLocalnet,
     makeClient,
     makeSigner,
-    suiRpcUrl,
     waitForCoinBalance,
 } from "./_env.js";
 
@@ -60,7 +59,7 @@ describe("HashiClient.deposit (real network)", () => {
                 // construction. Read it anyway to keep the assertion shape
                 // identical to the devnet path and resilient against any
                 // future change that pre-funds new signers with hBTC.
-                const balanceBefore = await fetchCoinBalance(suiRpcUrl(), recipient, btcCoinType());
+                const balanceBefore = await fetchCoinBalance(client, recipient, btcCoinType());
 
                 const { funded } = await fundDepositOnLocalnet(client, recipient);
 
@@ -86,7 +85,7 @@ describe("HashiClient.deposit (real network)", () => {
 
                 const target = balanceBefore + funded.amountSats;
                 const final = await waitForCoinBalance(
-                    suiRpcUrl(),
+                    client,
                     recipient,
                     btcCoinType(),
                     target,
@@ -128,7 +127,7 @@ describe("HashiClient.deposit (real network)", () => {
             const amountSats = BigInt(TEST_AMOUNT_SATS);
 
             const balanceBefore = waitForHBtc
-                ? await fetchCoinBalance(suiRpcUrl(), recipient, btcCoinType())
+                ? await fetchCoinBalance(client, recipient, btcCoinType())
                 : 0n;
 
             const result = await client.hashi.deposit({
@@ -160,7 +159,7 @@ describe("HashiClient.deposit (real network)", () => {
                     `timeout=${DEVNET_HBTC_TIMEOUT_MS / 60_000} min`,
             );
             for (;;) {
-                const current = await fetchCoinBalance(suiRpcUrl(), recipient, btcCoinType());
+                const current = await fetchCoinBalance(client, recipient, btcCoinType());
                 if (current >= target) {
                     // eslint-disable-next-line no-console
                     console.log(`[deposit.test] hBTC arrived: balance=${current}`);

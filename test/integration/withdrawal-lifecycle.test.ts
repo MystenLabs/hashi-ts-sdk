@@ -8,7 +8,6 @@ import {
     fundDepositOnLocalnet,
     isLocalnet,
     makeClient,
-    suiRpcUrl,
     waitForCoinBalance,
     type ExtendedHashiClient,
 } from "./_env.js";
@@ -61,7 +60,7 @@ describe.skipIf(!isLocalnet())("HashiClient withdrawal lifecycle (localnet)", ()
         "deposit: signer mints hBTC by funding the derived deposit address",
         async () => {
             state.balanceBeforeDeposit = await fetchCoinBalance(
-                suiRpcUrl(),
+                state.client,
                 state.recipient,
                 btcCoinType(),
             );
@@ -83,7 +82,7 @@ describe.skipIf(!isLocalnet())("HashiClient withdrawal lifecycle (localnet)", ()
 
             const target = state.balanceBeforeDeposit + funded.amountSats;
             state.balanceAfterDeposit = await waitForCoinBalance(
-                suiRpcUrl(),
+                state.client,
                 state.recipient,
                 btcCoinType(),
                 target,
@@ -137,8 +136,10 @@ describe.skipIf(!isLocalnet())("HashiClient withdrawal lifecycle (localnet)", ()
         state.requestId = parsed.request_id;
 
         // Sanity: hBTC is locked at request time — balance should drop by
-        // exactly the requested amount once the request lands.
-        const after = await fetchCoinBalance(suiRpcUrl(), state.recipient, btcCoinType());
+        // exactly the requested amount once the request lands. Reads via
+        // gRPC so the post-tx state is visible immediately (JSON-RPC's
+        // index lags committed checkpoints by a few hundred ms on localnet).
+        const after = await fetchCoinBalance(state.client, state.recipient, btcCoinType());
         expect(after).toBe(state.balanceAfterDeposit - state.withdrawAmountSats);
     }, 60_000);
 
@@ -180,7 +181,7 @@ describe.skipIf(!isLocalnet())("HashiClient withdrawal lifecycle (localnet)", ()
 
             // Balance must return to the post-deposit value: cancel unlocks
             // exactly what request locked.
-            const after = await fetchCoinBalance(suiRpcUrl(), state.recipient, btcCoinType());
+            const after = await fetchCoinBalance(state.client, state.recipient, btcCoinType());
             expect(after).toBe(state.balanceAfterDeposit);
         },
         COOLDOWN_BUDGET_MS + 60_000,
