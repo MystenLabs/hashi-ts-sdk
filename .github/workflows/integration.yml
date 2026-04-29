@@ -91,29 +91,32 @@ jobs:
         run: cargo build --release --bin hashi-localnet -p e2e-tests
 
       - name: Start hashi-localnet (background)
+        env:
+          NUM_VALIDATORS: 4
         run: |
           mkdir -p "$LOCALNET_DATA_DIR"
-          # 6 validators tolerates 2 simultaneous failures vs 1 with 4
-          # (threshold is 6666/10000 ≈ ⅔). PR #11 CI run 25057025192 lost
-          # quorum at 2/4 timeouts during Kyoto BIP-157 warmup; 2/6 leaves
-          # 4 validators (6666 weight) — exactly the threshold floor. If
-          # failures stay independent, this clears them; if they're
-          # correlated (host CPU/IO starvation), bumping N won't help and
-          # we'll need to pre-warm or scope back the integration tests.
+          # 4 validators is the right floor: on-chain `committee::verify_certificate`
+          # threshold is 2 (`MpcManager initialized` shows `threshold=2 max_faulty=1`).
+          # We tried bumping to 6 in 0d3ddf5 expecting 2/6 fault tolerance, but it
+          # made things worse — every extra validator adds a Kyoto BIP-157 client
+          # contending for the single regtest bitcoind, which amplified the peer-
+          # disconnect storm seen in run 25097936525. Recovery here is
+          # "pre-warm Kyoto in the readiness step" (next), not "more validators".
           nohup hashi/target/release/hashi-localnet start \
-            --num-validators 6 \
+            --num-validators "$NUM_VALIDATORS" \
             --sui-rpc-port 9000 \
             --btc-rpc-port 18443 \
             --data-dir "$LOCALNET_DATA_DIR" \
             --verbose \
             > "$LOCALNET_LOG" 2>&1 &
           echo $! > "$LOCALNET_DATA_DIR/runner.pid"
+          echo "NUM_VALIDATORS=$NUM_VALIDATORS" >> "$GITHUB_ENV"
           echo "hashi-localnet PID: $(cat $LOCALNET_DATA_DIR/runner.pid)"
 
       - name: Wait for localnet readiness
         run: |
           set -euo pipefail
-          echo "Phase 1/2: waiting for state.json (cap 5 min)…"
+          echo "Phase 1/3: waiting for state.json (cap 5 min)…"
           for i in $(seq 1 60); do
             if [[ -f "$LOCALNET_DATA_DIR/state.json" ]]; then
               echo "state.json appeared after ~$((i * 5)) s"
@@ -128,7 +131,8 @@ jobs:
           fi
 
           OBJ=$(jq -r .hashi_object_id "$LOCALNET_DATA_DIR/state.json")
-          echo "Phase 2/2: polling Hashi object $OBJ for non-empty MPC key (cap 3 min)…"
+          echo "Phase 2/3: polling Hashi object $OBJ for non-empty MPC key (cap 3 min)…"
+          MPC_OK=0
           for i in $(seq 1 36); do
             LEN=$(curl -s -X POST http://127.0.0.1:9000 \
               -H content-type:application/json \
@@ -136,11 +140,54 @@ jobs:
               | jq -r '.result.data.content.fields.committee_set.fields.mpc_public_key | length' 2>/dev/null || echo 0)
             if [[ "$LEN" -gt 0 ]]; then
               echo "MPC key on chain (length=$LEN) after ~$((i * 5)) s — DKG settled."
+              MPC_OK=1
+              break
+            fi
+            sleep 5
+          done
+          if [[ "$MPC_OK" -ne 1 ]]; then
+            echo "::error::DKG did not settle within budget; MPC key still empty"
+            tail -n 200 "$LOCALNET_LOG"
+            exit 1
+          fi
+
+          # Phase 3: pre-warm Kyoto BIP-157 sync. PR #11 run 25097936525
+          # showed validators racing the in-test 300 s deadline to finish
+          # compact-filter download — most never made it, so the certificate
+          # collected only 1 signer (threshold=2) and aborted on-chain with
+          # `committee::verify_certificate` ENotEnoughStake. Move the wait
+          # into readiness so it surfaces as a single clear failure here
+          # instead of an opaque test timeout downstream.
+          #
+          # Signal: each validator emits exactly one
+          # `Synchronized to height $TIP …` log line per new tip — confirmed
+          # by counting hits in the artifact (6 validators → 6 hits per
+          # height). We poll until ≥ NUM_VALIDATORS hits exist at the
+          # current bitcoind tip.
+          BTC_USER=$(jq -r .btc_rpc_user "$LOCALNET_DATA_DIR/state.json")
+          BTC_PASS=$(jq -r .btc_rpc_password "$LOCALNET_DATA_DIR/state.json")
+          BTC_URL=$(jq -r .btc_rpc_url "$LOCALNET_DATA_DIR/state.json")
+          TIP=$(curl -s --user "$BTC_USER:$BTC_PASS" \
+            -H content-type:application/json \
+            --data '{"jsonrpc":"1.0","id":1,"method":"getblockcount","params":[]}' \
+            "$BTC_URL" | jq -r .result)
+          if [[ -z "$TIP" || "$TIP" == "null" ]]; then
+            echo "::error::Could not read regtest tip from bitcoind"
+            tail -n 200 "$LOCALNET_LOG"
+            exit 1
+          fi
+          echo "Phase 3/3: waiting for Kyoto sync to tip $TIP on ≥$NUM_VALIDATORS validators (cap 5 min)…"
+          for i in $(seq 1 60); do
+            SYNCED=$(grep -Ec "Synchronized to height $TIP\b" "$LOCALNET_LOG" 2>/dev/null || true)
+            SYNCED=${SYNCED:-0}
+            if [[ "$SYNCED" -ge "$NUM_VALIDATORS" ]]; then
+              echo "≥$NUM_VALIDATORS validators reached tip $TIP after ~$((i * 5)) s ($SYNCED hits)"
               exit 0
             fi
             sleep 5
           done
-          echo "::error::DKG did not settle within budget; MPC key still empty"
+          echo "::error::Only $SYNCED of $NUM_VALIDATORS validators reached Kyoto tip $TIP within budget"
+          grep -E "Synchronized to height|Kyoto: Percent complete" "$LOCALNET_LOG" | tail -40 || true
           tail -n 200 "$LOCALNET_LOG"
           exit 1
 
