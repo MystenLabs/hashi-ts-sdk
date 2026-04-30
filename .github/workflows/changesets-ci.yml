@@ -1,5 +1,5 @@
 name: Changesets CI
-on: pull_request
+on: workflow_dispatch
 jobs:
   validate:
     runs-on: ubuntu-latest
