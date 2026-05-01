@@ -30,7 +30,7 @@
 	"scripts": {
 		"build": "rm -rf dist && tsc --noEmit && tsdown",
 		"test": "vitest --project=unit",
-		"test:integration": "vitest --project=integration",
+		"test:integration": "vitest run --project=integration",
 		"coverage": "vitest run --project=unit --coverage",
 		"codegen": "sui-ts-codegen generate",
 		"format": "prettier --write \"**/*.{ts,json,md}\""

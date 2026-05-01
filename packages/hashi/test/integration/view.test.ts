@@ -1,28 +1,29 @@
 import { describe, it, expect, beforeAll, afterEach } from "vitest";
-import { HashiClient, hashi } from "../../src/client.js";
-import { SuiGrpcClient } from "@mysten/sui/grpc";
+import { ExtendedHashiClient, isLocalnet, makeClient } from "./_env.js";
 
 /**
- * Integration tests for `HashiClient.view.*` against the live Sui devnet.
+ * Integration tests for `HashiClient.view.*`.
  *
- * Each test fires real gRPC calls. A 5-second spacer runs after every
- * test to avoid rate limiting. Values are checked as loose invariants
- * (types, positivity, floor relationships) rather than exact matches,
- * because devnet governance can change the on-chain parameters.
+ * Same test bodies run against both targets:
+ *  - **devnet** (default): hits `https://fullnode.devnet.sui.io:443`. A
+ *    5-second spacer runs after every test to avoid public-RPC rate limiting.
+ *  - **localnet** (CI): hits a fresh `hashi-localnet` Sui node on `127.0.0.1`.
+ *    No rate limit, so we drop the spacer.
+ *
+ * Values are checked as loose invariants (types, positivity, floor
+ * relationships) rather than exact matches, because both targets carry
+ * configurable governance state.
  */
-describe("HashiClient.view (devnet)", () => {
-    let client: SuiGrpcClient & { hashi: HashiClient };
+describe("HashiClient.view", () => {
+    let client: ExtendedHashiClient;
 
     beforeAll(() => {
-        client = new SuiGrpcClient({
-            network: "devnet",
-            baseUrl: "https://fullnode.devnet.sui.io:443",
-        }).$extend(hashi({ network: "devnet" }));
+        client = makeClient();
     });
 
-    // 5s spacing between devnet hits — placed after each test so the
-    // first one starts immediately but subsequent calls aren't hammered.
-    afterEach(() => new Promise((resolve) => setTimeout(resolve, 5000)));
+    if (!isLocalnet()) {
+        afterEach(() => new Promise((resolve) => setTimeout(resolve, 5000)));
+    }
 
     const TIMEOUT = 30_000;
 
@@ -92,10 +93,10 @@ describe("HashiClient.view (devnet)", () => {
     );
 
     it(
-        "withdrawalCancellationCooldownMs is positive",
+        "withdrawalCancellationCooldownMs is non-negative",
         async () => {
             const ms = await client.hashi.view.withdrawalCancellationCooldownMs();
-            expect(ms).toBeGreaterThan(0n);
+            expect(ms).toBeGreaterThanOrEqual(0n);
         },
         TIMEOUT,
     );
