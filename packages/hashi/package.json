@@ -1,0 +1,56 @@
+{
+	"name": "@mysten-incubation/hashi",
+	"version": "0.0.1",
+	"description": "TypeScript SDK for the Hashi Sui Move smart contracts",
+	"license": "Apache-2.0",
+	"author": "Mysten Labs <build@mystenlabs.com>",
+	"type": "module",
+	"main": "./dist/index.mjs",
+	"types": "./dist/index.d.mts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs"
+		}
+	},
+	"sideEffects": false,
+	"files": ["CHANGELOG.md", "LICENSE", "dist"],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/MystenLabs/hashi-ts-sdk.git"
+	},
+	"bugs": {
+		"url": "https://github.com/MystenLabs/hashi-ts-sdk/issues/new"
+	},
+	"homepage": "https://github.com/MystenLabs/hashi-ts-sdk#readme",
+	"publishConfig": {
+		"access": "public"
+	},
+	"keywords": ["sui", "hashi", "bitcoin", "btc", "sdk", "mysten"],
+	"scripts": {
+		"build": "rm -rf dist && tsc --noEmit && tsdown",
+		"test": "vitest --project=unit",
+		"test:integration": "vitest run --project=integration",
+		"coverage": "vitest run --project=unit --coverage",
+		"codegen": "sui-ts-codegen generate",
+		"format": "prettier --write \"**/*.{ts,json,md}\""
+	},
+	"peerDependencies": {
+		"@mysten/bcs": "^2.0.3",
+		"@mysten/codegen": "^0.8.3",
+		"@mysten/sui": "^2.14.1"
+	},
+	"devDependencies": {
+		"@mysten/bcs": "^2.0.3",
+		"@mysten/codegen": "^0.8.3",
+		"@mysten/sui": "^2.14.1",
+		"@types/node": "^25.6.0",
+		"@vitest/coverage-v8": "^4.1.5",
+		"vitest": "^4.1.5"
+	},
+	"dependencies": {
+		"@noble/curves": "^2.0.1",
+		"@noble/hashes": "^2.0.1",
+		"@scure/base": "^2.0.0"
+	}
+}

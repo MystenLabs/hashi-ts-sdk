@@ -8,7 +8,7 @@ const config: SuiCodegenConfig = {
     packages: [
         {
             package: "@local-pkg/hashi", // TODO: update this when hashi is published on MVR.
-            path: "hashi/packages/hashi",
+            path: "../../hashi/packages/hashi",
         },
     ],
 };

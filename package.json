@@ -1,35 +1,26 @@
 {
-    "name": "@mysten/hashi",
-    "version": "0.0.0",
-    "description": "TypeScript SDK for Hashi",
-    "main": "index.js",
-    "scripts": {
-        "start": "node index.js",
-        "test": "vitest --project=unit",
-        "test:integration": "vitest run --project=integration",
-        "coverage": "vitest run --project=unit --coverage",
-        "codegen": "sui-ts-codegen generate",
-        "format": "prettier --write \"**/*.{ts,json,md}\" \"!hashi/**\""
-    },
-    "keywords": [],
-    "author": "Mysten Labs <build@mystenlabs.com>",
+    "name": "hashi-ts-sdk",
+    "private": true,
     "license": "Apache-2.0",
+    "scripts": {
+        "test": "turbo run test",
+        "build": "turbo run build",
+        "lint": "pnpm run prettier:check",
+        "lint:fix": "pnpm run prettier:fix",
+        "prettier:check": "prettier -c --ignore-unknown .",
+        "prettier:fix": "prettier -w --ignore-unknown .",
+        "changeset-version": "pnpm changeset version",
+        "release": "pnpm turbo run build --filter \"./packages/*\" && pnpm changeset publish"
+    },
     "packageManager": "pnpm@10.33.0",
-    "peerDependencies": {
-        "@mysten/codegen": "^0.8.3",
-        "@mysten/sui": "^2.14.1"
+    "engines": {
+        "pnpm": ">=10.33.0"
     },
     "devDependencies": {
-        "@mysten/codegen": "^0.8.3",
-        "@mysten/sui": "^2.14.1",
-        "@types/node": "^25.6.0",
-        "@vitest/coverage-v8": "^4.1.5",
-        "prettier": "^3.8.1",
-        "vitest": "^4.1.5"
-    },
-    "dependencies": {
-        "@noble/curves": "^2.0.1",
-        "@noble/hashes": "^2.0.1",
-        "@scure/base": "^2.0.0"
+        "@changesets/cli": "^2.29.8",
+        "prettier": "^3.7.4",
+        "tsdown": "0.20.0-beta.1",
+        "turbo": "^2.7.4",
+        "typescript": "^5.9.3"
     }
 }
