@@ -243,7 +243,7 @@ jobs:
           echo "btc-heartbeat PID: $(cat /tmp/btc-heartbeat.pid) mining to $ADDR every 20s"
 
       - name: Run integration tests
-        run: pnpm test:integration
+        run: pnpm --filter @mysten-incubation/hashi test:integration
 
       - name: Stop bitcoind block heartbeat
         if: always()

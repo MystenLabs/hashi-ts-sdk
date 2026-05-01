@@ -4,46 +4,77 @@ TypeScript SDK for interacting with the Hashi Sui Move smart contracts.
 
 ## Structure
 
+This repo is a pnpm workspace. The SDK lives in `packages/hashi/` so it can be lifted into [`MystenLabs/ts-sdks`](https://github.com/MystenLabs/ts-sdks) at graduation with no path rewrites.
+
+### Workspace root
+
+- `package.json` — workspace root (private, never published). Owns shared scripts (`build`, `test`, `lint`, `release`, `changeset-version`) and dev tools (`@changesets/cli`, `tsdown`, `turbo`, `prettier`, `typescript`).
+- `pnpm-workspace.yaml` — declares `packages/**`; sets `minimumReleaseAge: 2880` (supply-chain guard).
+- `tsconfig.shared.json` — shared TS compiler options; package `tsconfig.json`s extend it.
+- `turbo.json` — task graph for `build`, `test`, `lint`.
+- `.changeset/` — changeset config + pending changeset markdown files (release flow).
+- `RELEASING.md` — how to cut a release (changeset workflow, first-time setup, OIDC trusted publisher).
+- `sonar-project.properties` — SonarQube configuration; sources/coverage paths point into `packages/hashi/`.
+- `.github/workflows/` — CI:
+  - `lint.yml`, `test.yml`, `sonarqube.yml` — formatting / unit tests / coverage on push/PR to `main`.
+  - `integration.yml` — full hashi-localnet stack (Sui localnet + BTC regtest + N validators with DKG) on every push/PR to `main`; see SEDEFI-183.
+  - `changesets.yml` — push-to-main: opens "Version Packages" PR or publishes via OIDC.
+  - `changesets-ci.yml` (currently `workflow_dispatch` only — manual until first npm publish), `changesets-ci-comment.yml` — PR-time changeset enforcement (the butterfly comment).
+- `hashi/` — git submodule ([MystenLabs/hashi](https://github.com/MystenLabs/hashi)); contains `packages/` with Sui Move contracts and `crates/e2e-tests` whose `hashi-localnet` Rust binary is built and run by the integration workflow. Goes away once Hashi contracts are on MVR.
+
+### `packages/hashi/`
+
+- `package.json` — name: `@mysten-incubation/hashi`, version: `0.0.1`, license: Apache-2.0. Publishes to npm via OIDC trusted publisher (no `NPM_TOKEN`).
+- `tsconfig.json` — extends `../../tsconfig.shared.json`; overrides `composite/declaration/declarationMap: false` so tsdown owns declaration emit.
+- `tsdown.config.ts` — single-entry ESM config; `dts: true`, `unbundle: true` (preserves source structure).
+- `vitest.config.mts` — unit + integration projects; loads `.env` for integration tests.
+- `sui-codegen.config.ts` — codegen config (`path: "../../hashi/packages/hashi"` resolves to the submodule).
 - `src/` — SDK source code (TypeScript)
   - `client.ts` — `HashiClient` class (via `$extend` pattern); direct methods (`deposit`, `requestWithdrawal`, `cancelWithdrawal` — all sign + execute), plus `generateDepositAddress`, `view.*`, `tx.*`, `call.*`
   - `bitcoin.ts` — Bitcoin address derivation and bech32/bech32m decoding (`bitcoinAddressToWitnessProgram`)
   - `constants.ts` — `NETWORK_CONFIG` (Hashi object/package ids and default BTC network per Sui network)
   - `errors.ts` — typed SDK errors (`HashiConfigError`, `HashiFetchError`, `HashiPausedError`, `AmountBelowMinimumError`, `InvalidParamsError`, `InvalidBitcoinAddressError`)
   - `types.ts` — public types (`DepositParams`, `WithdrawalParams`, `CancelWithdrawalParams`, `UtxoOutput`, `GovernanceConfig`, network/option shapes)
-  - `util.ts` — internal helpers (`assertHex32` hex validation, `entry` for VecMap decoding)
+  - `util.ts` — internal helpers (`assertHex32` hex validation, `entry` for VecMap decoding, `reverseTxidBytes`)
   - `index.ts` — public exports
   - `contracts/` — auto-generated Move bindings (`@mysten/codegen`); do not edit
 - `test/` — unit and integration tests (vitest)
-  - `test/integration/_env.ts` — shared helper (`makeClient`, `makeSigner`, `isLocalnet`, `localnetCli`, `btcRpc`, `fundDepositOnLocalnet`, `waitForCoinBalance`); tests use it to stay byte-identical between devnet and localnet targets
-- `hashi/` — git submodule ([MystenLabs/hashi](https://github.com/MystenLabs/hashi)); contains `packages/` with Sui Move contracts and `crates/e2e-tests` whose `hashi-localnet` Rust binary is built and run by the integration workflow. This will be removed when hashi is published on MVR because codegen will no longer have to use the `@local-pkg` util.
-- `package.json` — package: `@mysten/hashi`, license: Apache-2.0
-- `tsconfig.json` — strict TS config, ES2020 target, NodeNext modules
-- `sonar-project.properties` — SonarQube configuration (project key, sources, lcov path, exclusions)
-- `.github/workflows/` — CI: `lint.yml`, `test.yml`, `sonarqube.yml`, `integration.yml` (full hashi-localnet stack — Sui localnet + BTC regtest + N validators with DKG — on every push/PR to `main`; see SEDEFI-183)
+  - `test/integration/_env.ts` — shared helper (`makeClient`, `makeSigner`, `isLocalnet`, `localnetCli`, `btcRpc`, `fundDepositOnLocalnet`, `waitForCoinBalance`); tests use it to stay byte-identical between devnet and localnet targets.
+- `CHANGELOG.md`, `LICENSE` — included in published tarball.
 
 ## Commands
 
-- `pnpm test` — run unit tests via vitest
-- `pnpm test:integration` — run integration tests; defaults to Sui devnet, switches to a local hashi-localnet stack when `HASHI_E2E_SUI_NETWORK=localnet` and the related `HASHI_E2E_*` env vars are set (the `integration.yml` CI workflow exports them automatically; locally, run `hashi/target/release/hashi-localnet start --data-dir .hashi/localnet` first and source state.json)
-- `pnpm coverage` — run unit tests with v8 coverage (writes `coverage/lcov.info` for SonarQube)
-- `pnpm build-contract` — build the Sui Move contracts (`hashi/packages/hashi/`) in order for them to be consumed by the codegen tool
-- `pnpm codegen` — regenerate TypeScript bindings from Move contracts
-- `pnpm format` — format code with prettier
+Two surfaces depending on where you run them.
+
+### From workspace root (works anywhere)
+
+- `pnpm test` — unit tests via turbo → vitest
+- `pnpm build` — typecheck + tsdown bundle (writes `packages/hashi/dist/`)
+- `pnpm lint` / `pnpm lint:fix` — prettier check / write
+- `pnpm changeset` — create a changeset to describe a release-worthy change
+- `pnpm release` — build all packages, then `changeset publish` (used by CI; not normally invoked locally)
+
+### Package-only (`pnpm --filter @mysten-incubation/hashi <cmd>` from root, or `cd packages/hashi`)
+
+- `test:integration` — integration tests; defaults to Sui devnet, switches to a local hashi-localnet stack when `HASHI_E2E_SUI_NETWORK=localnet` and the related `HASHI_E2E_*` env vars are set (the `integration.yml` CI workflow exports them automatically; locally, run `hashi/target/release/hashi-localnet start --data-dir .hashi/localnet` first and source state.json)
+- `coverage` — unit tests with v8 coverage (writes `packages/hashi/coverage/lcov.info` for SonarQube)
+- `codegen` — regenerate TypeScript bindings from Move contracts under `src/contracts/`
+- `format` — format the package's TS/JSON/MD files with prettier
 
 ## Dependencies
 
-- `@mysten/sui`, `@mysten/codegen` — peer dependencies (Sui SDK)
+- `@mysten/sui`, `@mysten/bcs`, `@mysten/codegen` — peer dependencies (Sui SDK)
 - `@noble/curves`, `@noble/hashes` — secp256k1 point math and SHA3-HKDF for key derivation
 - `@scure/base` — bech32m encoding for taproot addresses
 
 ## Networks
 
-Currently only Sui **devnet** is wired up (`src/constants.ts`); BTC defaults to **signet**. Devnet support is **temporary** and will be deprecated in favor of:
+Currently only Sui **devnet** is wired up (`packages/hashi/src/constants.ts`); BTC defaults to **signet**. Devnet support is **temporary** and will be deprecated in favor of:
 
 - **testnet** — for end-to-end testing of SDK consumers (and our own real-network tests).
 - **mainnet** — for production DeFi consumers using the SDK against live BTC.
 
-Update `NETWORK_CONFIG` in `src/constants.ts` when those network deployments land.
+Update `NETWORK_CONFIG` in `packages/hashi/src/constants.ts` when those network deployments land.
 
 ## Bitcoin Address Scheme
 
@@ -59,7 +90,7 @@ See https://mystenlabs.github.io/hashi/design/address-scheme.html
 
 - Keep this file short and up to date as the SDK evolves.
 - `@noble/*` and `@scure/*` imports require `.js` extensions (`@noble/curves/secp256k1.js`) due to `moduleResolution: NodeNext`.
-- Do not edit files under `src/contracts/` — they are auto-generated by codegen.
-- **This SDK is user-facing only.** `call.*`, `tx.*`, and the direct methods expose only actions an end user performs (deposit, withdraw, cancel). Do not add wrappers for operator/committee/relayer calls (e.g. `confirmDeposit`, `approveRequest`, `commitWithdrawalTx`, `signWithdrawal`, `confirmWithdrawal`, `deleteExpiredDeposit`, `allocatePresigsForWithdrawalTxn`) — operator tooling can import the generated bindings under `src/contracts/hashi/` directly.
-- **BTC txids passed to `client.hashi.deposit()` are display order** (the form mempool.space, blockstream.info, and `bitcoin-cli` show). The SDK reverses to internal byte order via `reverseTxidBytes` in `src/util.ts` before recording on-chain, because the committee verifier reads `Utxo.txid` as a `bitcoin::Txid` (internal/little-endian). Recording display-order bytes leaves the committee searching for a phantom byte-reversed tx and the deposit silently never confirms — see SEDEFI-190.
-- **Integration tests have two targets — devnet (default) and localnet (CI).** Both run through the same test files in `test/integration/`; only env vars differ. Adding a new integration test should reuse `_env.ts` helpers so it works on both targets without duplication. Localnet-only flows that depend on the committee actually minting hBTC (real deposit/withdrawal lifecycles) gate themselves with `describe.skipIf(!isLocalnet())`.
+- Do not edit files under `packages/hashi/src/contracts/` — they are auto-generated by codegen.
+- **This SDK is user-facing only.** `call.*`, `tx.*`, and the direct methods expose only actions an end user performs (deposit, withdraw, cancel). Do not add wrappers for operator/committee/relayer calls (e.g. `confirmDeposit`, `approveRequest`, `commitWithdrawalTx`, `signWithdrawal`, `confirmWithdrawal`, `deleteExpiredDeposit`, `allocatePresigsForWithdrawalTxn`) — operator tooling can import the generated bindings under `packages/hashi/src/contracts/hashi/` directly.
+- **BTC txids passed to `client.hashi.deposit()` are display order** (the form mempool.space, blockstream.info, and `bitcoin-cli` show). The SDK reverses to internal byte order via `reverseTxidBytes` in `packages/hashi/src/util.ts` before recording on-chain, because the committee verifier reads `Utxo.txid` as a `bitcoin::Txid` (internal/little-endian). Recording display-order bytes leaves the committee searching for a phantom byte-reversed tx and the deposit silently never confirms — see SEDEFI-190.
+- **Integration tests have two targets — devnet (default) and localnet (CI).** Both run through the same test files in `packages/hashi/test/integration/`; only env vars differ. Adding a new integration test should reuse `_env.ts` helpers so it works on both targets without duplication. Localnet-only flows that depend on the committee actually minting hBTC (real deposit/withdrawal lifecycles) gate themselves with `describe.skipIf(!isLocalnet())`.
