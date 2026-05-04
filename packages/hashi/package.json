@@ -36,12 +36,9 @@
 		"format": "prettier --write \"**/*.{ts,json,md}\""
 	},
 	"peerDependencies": {
-		"@mysten/bcs": "^2.0.3",
-		"@mysten/codegen": "^0.8.3",
 		"@mysten/sui": "^2.14.1"
 	},
 	"devDependencies": {
-		"@mysten/bcs": "^2.0.3",
 		"@mysten/codegen": "^0.8.3",
 		"@mysten/sui": "^2.14.1",
 		"@types/node": "^25.6.0",
