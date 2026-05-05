@@ -7,6 +7,8 @@ import { type Transaction } from "@mysten/sui/transactions";
 import * as utxo from "./utxo.js";
 import * as utxo_1 from "./utxo.js";
 import * as utxo_2 from "./utxo.js";
+import * as committee from "./committee.js";
+import * as utxo_3 from "./utxo.js";
 const $moduleName = "@local-pkg/hashi::deposit";
 export const DepositConfirmationMessage = new MoveStruct({
     name: `${$moduleName}::DepositConfirmationMessage`,
@@ -27,13 +29,20 @@ export const DepositRequestedEvent = new MoveStruct({
         sui_tx_digest: bcs.vector(bcs.u8()),
     },
 });
+export const DepositApprovedEvent = new MoveStruct({
+    name: `${$moduleName}::DepositApprovedEvent`,
+    fields: {
+        request_id: bcs.Address,
+        utxo: utxo_2.Utxo,
+        cert: committee.CommitteeSignature,
+        approval_timestamp_ms: bcs.u64(),
+    },
+});
 export const DepositConfirmedEvent = new MoveStruct({
     name: `${$moduleName}::DepositConfirmedEvent`,
     fields: {
         request_id: bcs.Address,
-        utxo_id: utxo_2.UtxoId,
-        amount: bcs.u64(),
-        derivation_path: bcs.option(bcs.Address),
+        utxo: utxo_3.Utxo,
     },
 });
 export const ExpiredDepositDeletedEvent = new MoveStruct({
@@ -64,25 +73,71 @@ export function deposit(options: DepositOptions) {
             arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         });
 }
-export interface ConfirmDepositArguments {
+export interface ApproveDepositArguments {
     hashi: RawTransactionArgument<string>;
     requestId: RawTransactionArgument<string>;
     cert: RawTransactionArgument<string>;
 }
-export interface ConfirmDepositOptions {
+export interface ApproveDepositOptions {
     package?: string;
     arguments:
-        | ConfirmDepositArguments
+        | ApproveDepositArguments
         | [
               hashi: RawTransactionArgument<string>,
               requestId: RawTransactionArgument<string>,
               cert: RawTransactionArgument<string>,
           ];
 }
+/**
+ * First phase of deposit confirmation. Records a committee certificate over
+ * `(request_id, utxo)` on the request, alongside the approval timestamp, and
+ * re-inserts the request into the queue.
+ *
+ * The approval is not yet final — `confirm_deposit` must be called after the
+ * configured `bitcoin_deposit_time_delay_ms` has elapsed. The delay gives
+ * operators a window to detect a faulty or fraudulent committee signature and
+ * pause the service before funds are minted; while paused, `confirm_deposit` is
+ * rejected, leaving the approval parked. If the committee rotates during the
+ * window, the deposit will also need to be re-approved by the new epoch's
+ * committee.
+ */
+export function approveDeposit(options: ApproveDepositOptions) {
+    const packageAddress = options.package ?? "@local-pkg/hashi";
+    const argumentsTypes = [null, "address", null, "0x2::clock::Clock"] satisfies (string | null)[];
+    const parameterNames = ["hashi", "requestId", "cert"];
+    return (tx: Transaction) =>
+        tx.moveCall({
+            package: packageAddress,
+            module: "deposit",
+            function: "approve_deposit",
+            arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        });
+}
+export interface ConfirmDepositArguments {
+    hashi: RawTransactionArgument<string>;
+    requestId: RawTransactionArgument<string>;
+}
+export interface ConfirmDepositOptions {
+    package?: string;
+    arguments:
+        | ConfirmDepositArguments
+        | [hashi: RawTransactionArgument<string>, requestId: RawTransactionArgument<string>];
+}
+/**
+ * Second phase of deposit confirmation. Re-verifies the stored committee
+ * certificate against the current committee, enforces the time-delay since
+ * approval, then mints BTC to the recipient (if any) and moves the UTXO into the
+ * active pool.
+ *
+ * Re-verifying against the current committee means an approval from a rotated-out
+ * committee will not confirm — it must be re-approved by the current committee.
+ * Aborts if the request was never approved (no stored cert), the cert no longer
+ * verifies (committee rotated), or the time-delay window has not yet elapsed.
+ */
 export function confirmDeposit(options: ConfirmDepositOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, "address", null] satisfies (string | null)[];
-    const parameterNames = ["hashi", "requestId", "cert"];
+    const argumentsTypes = [null, "address", "0x2::clock::Clock"] satisfies (string | null)[];
+    const parameterNames = ["hashi", "requestId"];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,

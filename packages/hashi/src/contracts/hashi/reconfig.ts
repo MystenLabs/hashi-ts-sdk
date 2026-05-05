@@ -31,12 +31,6 @@ export const EndReconfigEvent = new MoveStruct({
         mpc_public_key: bcs.vector(bcs.u8()),
     },
 });
-export const AbortReconfigEvent = new MoveStruct({
-    name: `${$moduleName}::AbortReconfigEvent`,
-    fields: {
-        epoch: bcs.u64(),
-    },
-});
 export interface StartReconfigArguments {
     self: RawTransactionArgument<string>;
 }
@@ -80,25 +74,6 @@ export function endReconfig(options: EndReconfigOptions) {
             package: packageAddress,
             module: "reconfig",
             function: "end_reconfig",
-            arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-        });
-}
-export interface AbortReconfigArguments {
-    Self: RawTransactionArgument<string>;
-}
-export interface AbortReconfigOptions {
-    package?: string;
-    arguments: AbortReconfigArguments | [Self: RawTransactionArgument<string>];
-}
-export function abortReconfig(options: AbortReconfigOptions) {
-    const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null] satisfies (string | null)[];
-    const parameterNames = ["Self"];
-    return (tx: Transaction) =>
-        tx.moveCall({
-            package: packageAddress,
-            module: "reconfig",
-            function: "abort_reconfig",
             arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         });
 }
