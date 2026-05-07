@@ -107,11 +107,9 @@ describe.skipIf(!isLocalnet())("HashiClient withdrawal payout (localnet)", () =>
             let receivedSats = 0n;
             for (;;) {
                 await localnetCli(["mine", "--blocks", "1"]);
-                const receivedBtc = await btcRpc<number>(
-                    "getreceivedbyaddress",
-                    [destination, 0],
-                    { wallet: "test" },
-                );
+                const receivedBtc = await btcRpc<number>("getreceivedbyaddress", [destination, 0], {
+                    wallet: "test",
+                });
                 receivedSats = BigInt(Math.round(receivedBtc * 1e8));
                 if (receivedSats >= minReceived) break;
                 if (Date.now() >= deadline) {
@@ -130,6 +128,19 @@ describe.skipIf(!isLocalnet())("HashiClient withdrawal payout (localnet)", () =>
 
             expect(receivedSats).toBeGreaterThanOrEqual(minReceived);
             expect(receivedSats).toBeLessThanOrEqual(withdrawAmountSats);
+
+            // --- view method assertions (SEDEFI-201) ---
+            // After the committee broadcasts, the withdrawal's btcTxid
+            // should be populated from the linked WithdrawalTransaction.
+            const history = await client.hashi.view.transactionHistory(recipient);
+            const wd = history.find(
+                (h) => h.kind === "withdrawal" && h.btcAmountSats === withdrawAmountSats,
+            );
+            expect(wd).toBeDefined();
+            expect(wd!.btcTxid).toBeTypeOf("string");
+            expect(wd!.btcTxid).toMatch(/^0x[0-9a-f]{64}$/);
+            // Status should be Processing, Signed, or Confirmed by this point.
+            expect(["Processing", "Signed", "Confirmed"]).toContain(wd!.status);
         },
         LOCALNET_HBTC_TIMEOUT_MS + LOCALNET_BTC_PAYOUT_TIMEOUT_MS + 120_000,
     );

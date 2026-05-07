@@ -1,8 +1,14 @@
-import type { ClientWithCoreApi } from "@mysten/sui/client";
+import type { ClientWithCoreApi, SuiClientTypes } from "@mysten/sui/client";
 import type { Signer } from "@mysten/sui/cryptography";
-import { fromHex } from "@mysten/sui/utils";
+import { bcs, TypeTagSerializer } from "@mysten/sui/bcs";
+import { fromHex, toHex, deriveDynamicFieldID } from "@mysten/sui/utils";
 import { Transaction, coinWithBalance } from "@mysten/sui/transactions";
 import { Hashi } from "./contracts/hashi/hashi.js";
+import { BitcoinState, BitcoinStateKey } from "./contracts/hashi/bitcoin_state.js";
+import { DepositRequest } from "./contracts/hashi/deposit_queue.js";
+import { WithdrawalRequest, WithdrawalTransaction } from "./contracts/hashi/withdrawal_queue.js";
+import { UtxoId as UtxoIdBcs } from "./contracts/hashi/utxo.js";
+import { Bag } from "./contracts/hashi/deps/sui/bag.js";
 import * as depositModule from "./contracts/hashi/deposit.js";
 import * as withdrawModule from "./contracts/hashi/withdraw.js";
 import * as utxoModule from "./contracts/hashi/utxo.js";
@@ -24,16 +30,25 @@ import {
 import type {
     BitcoinNetwork,
     CancelWithdrawalParams,
+    DepositHistoryItem,
     DepositParams,
     GovernanceConfig,
     HashiClientOptions,
     SuiNetwork,
+    TransactionHistoryItem,
+    UtxoId,
+    UtxoUsageResult,
+    WithdrawalHistoryItem,
     WithdrawalParams,
+    WithdrawalStatus,
 } from "./types.js";
 import { assertHex32, entry, reverseTxidBytes, type ConfigEntry } from "./util.js";
 
 /** Max value of an unsigned 32-bit integer; vout is a u32 on the Bitcoin side. */
 const U32_MAX = 0xffffffff;
+
+/** Max objects per `getObjects` call — Sui transports typically cap at 50. */
+const GET_OBJECTS_BATCH = 50;
 
 export function hashi<const Name = "hashi">({
     name = "hashi" as Name,
@@ -622,5 +637,206 @@ export class HashiClient {
          */
         worstCaseNetworkFee: async (): Promise<bigint> =>
             (await this.view.all()).worstCaseNetworkFee,
+
+        /**
+         * Check whether one or more Bitcoin UTXOs already exist in the
+         * on-chain `UtxoPool` — either as active (confirmed deposit, not yet
+         * consumed) or spent (consumed by a withdrawal). Callers use this to
+         * detect already-used outputs before submitting a deposit.
+         *
+         * `txid` in each `UtxoId` is **display byte order**; the method
+         * reverses to internal byte order before encoding the on-chain key.
+         */
+        findUsedUtxos: async (utxos: readonly UtxoId[]): Promise<UtxoUsageResult[]> => {
+            if (utxos.length === 0) return [];
+
+            const btcState = await this.#fetchBitcoinState();
+            const activePoolId = btcState.utxo_pool.utxo_records.id;
+            const spentPoolId = btcState.utxo_pool.spent_utxos.id;
+
+            const typeTag = TypeTagSerializer.parseFromStr(`${this.#packageId}::utxo::UtxoId`);
+
+            // Derive dynamic field IDs for every UTXO in both pools.
+            const fieldIds: string[] = [];
+            for (const u of utxos) {
+                const keyBcs = UtxoIdBcs.serialize({
+                    txid: reverseTxidBytes(u.txid),
+                    vout: u.vout,
+                }).toBytes();
+                fieldIds.push(
+                    deriveDynamicFieldID(activePoolId, typeTag, keyBcs),
+                    deriveDynamicFieldID(spentPoolId, typeTag, keyBcs),
+                );
+            }
+
+            // Batch-fetch — existence test only, no content needed.
+            const objects = await this.#batchGetObjects(fieldIds);
+
+            return utxos.map((u, i) => {
+                const inActivePool = !(objects[i * 2] instanceof Error);
+                const inSpentPool = !(objects[i * 2 + 1] instanceof Error);
+                return {
+                    utxoId: u,
+                    inActivePool,
+                    inSpentPool,
+                    isUsed: inActivePool || inSpentPool,
+                };
+            });
+        },
+
+        /**
+         * Fetch the unified transaction history (deposits + withdrawals) for
+         * a Sui address. Reads from `BitcoinState.user_requests` — a Table
+         * that maps each user address to a Bag of request IDs — then batch-
+         * fetches the request objects and dispatches by Move type.
+         *
+         * Deposit items include `btcTxid` / `btcVout` extracted from the
+         * UTXO stored on the `DepositRequest`. Withdrawal items include the
+         * BTC txid from the linked `WithdrawalTransaction` once the committee
+         * has committed one.
+         */
+        transactionHistory: async (suiAddress: string): Promise<TransactionHistoryItem[]> => {
+            const btcState = await this.#fetchBitcoinState();
+            const tableId = btcState.user_requests.id;
+
+            // Look up the user's Bag in the Table.
+            let userBagId: string;
+            try {
+                const { dynamicField } = await this.#client.core.getDynamicField({
+                    parentId: tableId,
+                    name: {
+                        type: "address",
+                        bcs: bcs.Address.serialize(suiAddress).toBytes(),
+                    },
+                });
+                const bag = Bag.parse(new Uint8Array(dynamicField.value.bcs));
+                userBagId = bag.id;
+            } catch {
+                return []; // No requests for this user.
+            }
+
+            // Enumerate all request IDs from the Bag.
+            const requestIds: string[] = [];
+            let cursor: string | null = null;
+            do {
+                const page = await this.#client.core.listDynamicFields({
+                    parentId: userBagId,
+                    cursor: cursor ?? undefined,
+                });
+                for (const df of page.dynamicFields) {
+                    requestIds.push(bcs.Address.parse(new Uint8Array(df.name.bcs)));
+                }
+                cursor = page.hasNextPage ? page.cursor : null;
+            } while (cursor);
+
+            if (requestIds.length === 0) return [];
+
+            // Batch-fetch all request objects with BCS content.
+            const objects = await this.#batchGetObjects(requestIds, { content: true });
+
+            const items: TransactionHistoryItem[] = [];
+            // Track indices of withdrawal items that have a linked transaction,
+            // so we can batch-fetch their WithdrawalTransaction objects.
+            const withdrawalTxnLookups: { itemIndex: number; txnId: string }[] = [];
+
+            for (const obj of objects) {
+                if (obj instanceof Error) continue;
+                if (obj.type.includes("::deposit_queue::DepositRequest")) {
+                    const parsed = DepositRequest.parse(obj.content!);
+                    items.push({
+                        kind: "deposit",
+                        requestId: parsed.id,
+                        sender: parsed.sender,
+                        timestampMs: BigInt(parsed.timestamp_ms),
+                        suiTxDigest: `0x${toHex(new Uint8Array(parsed.sui_tx_digest))}`,
+                        amountSats: BigInt(parsed.utxo.amount),
+                        btcTxid: reverseTxidBytes(parsed.utxo.id.txid),
+                        btcVout: parsed.utxo.id.vout,
+                        approved: parsed.approval_cert !== null,
+                        approvalTimestampMs:
+                            parsed.approval_timestamp_ms !== null
+                                ? BigInt(parsed.approval_timestamp_ms)
+                                : null,
+                    } satisfies DepositHistoryItem);
+                } else if (obj.type.includes("::withdrawal_queue::WithdrawalRequest")) {
+                    const parsed = WithdrawalRequest.parse(obj.content!);
+                    const txnId = parsed.withdrawal_txn_id ?? null;
+                    items.push({
+                        kind: "withdrawal",
+                        requestId: parsed.id,
+                        sender: parsed.sender,
+                        btcAmountSats: BigInt(parsed.btc_amount),
+                        bitcoinAddress: new Uint8Array(parsed.bitcoin_address),
+                        timestampMs: BigInt(parsed.timestamp_ms),
+                        suiTxDigest: `0x${toHex(new Uint8Array(parsed.sui_tx_digest))}`,
+                        status: parsed.status.$kind as WithdrawalStatus,
+                        withdrawalTxnId: txnId,
+                        btcTxid: null,
+                    } satisfies WithdrawalHistoryItem);
+                    if (txnId) {
+                        withdrawalTxnLookups.push({
+                            itemIndex: items.length - 1,
+                            txnId,
+                        });
+                    }
+                }
+            }
+
+            // Batch-fetch WithdrawalTransaction objects to populate btcTxid.
+            if (withdrawalTxnLookups.length > 0) {
+                const txnIds = withdrawalTxnLookups.map((l) => l.txnId);
+                const txnObjects = await this.#batchGetObjects(txnIds, { content: true });
+
+                for (let i = 0; i < withdrawalTxnLookups.length; i++) {
+                    const txnObj = txnObjects[i];
+                    if (txnObj instanceof Error) continue;
+                    const parsed = WithdrawalTransaction.parse(txnObj.content!);
+                    const item = items[withdrawalTxnLookups[i].itemIndex] as WithdrawalHistoryItem;
+                    // Overwrite the readonly btcTxid — we control construction.
+                    (item as { btcTxid: string | null }).btcTxid = reverseTxidBytes(parsed.txid);
+                }
+            }
+
+            return items;
+        },
     };
+
+    // ------------------------------------------------------------------
+    // Private helpers
+    // ------------------------------------------------------------------
+
+    /**
+     * Fetches the `BitcoinState` dynamic object field from the Hashi shared
+     * object. Returns the BCS-parsed struct whose nested Bag/Table IDs are
+     * used by `findUsedUtxos` and `transactionHistory`.
+     */
+    async #fetchBitcoinState() {
+        const { object } = await this.#client.core.getDynamicObjectField({
+            parentId: this.#hashiObjectId,
+            name: {
+                type: `${this.#packageId}::bitcoin_state::BitcoinStateKey`,
+                bcs: BitcoinStateKey.serialize({ dummy_field: false }).toBytes(),
+            },
+            include: { content: true },
+        });
+        return BitcoinState.parse(object.content!);
+    }
+
+    /**
+     * Batch-fetches objects in chunks of `GET_OBJECTS_BATCH`, concatenating
+     * the results. Each element is either an object or an `Error` (for
+     * missing / deleted objects).
+     */
+    async #batchGetObjects(objectIds: string[], include?: { content?: boolean }) {
+        const results: (SuiClientTypes.Object<{ content: true }> | Error)[] = [];
+        for (let i = 0; i < objectIds.length; i += GET_OBJECTS_BATCH) {
+            const batch = objectIds.slice(i, i + GET_OBJECTS_BATCH);
+            const { objects } = await this.#client.core.getObjects({
+                objectIds: batch,
+                include: include as { content: true },
+            });
+            results.push(...objects);
+        }
+        return results;
+    }
 }
