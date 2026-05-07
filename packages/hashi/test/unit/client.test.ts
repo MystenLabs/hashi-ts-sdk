@@ -8,7 +8,7 @@ import {
     InvalidParamsError,
 } from "../../src/errors.js";
 import { Hashi } from "../../src/contracts/hashi/hashi.js";
-import { BitcoinState } from "../../src/contracts/hashi/bitcoin_state.js";
+import { BitcoinState, BitcoinStateKey } from "../../src/contracts/hashi/bitcoin_state.js";
 import { DepositRequest } from "../../src/contracts/hashi/deposit_queue.js";
 import {
     WithdrawalRequest,
@@ -889,10 +889,29 @@ describe("HashiClient", () => {
             }).toBytes();
         }
 
+        const BTC_STATE_CHILD_ID = "0x" + "bb".repeat(32);
+
         function mockFetchBitcoinState() {
-            vi.spyOn(client.core, "getDynamicObjectField").mockResolvedValueOnce({
+            vi.spyOn(client.core, "listDynamicFields").mockResolvedValueOnce({
+                hasNextPage: false,
+                cursor: null,
+                dynamicFields: [
+                    {
+                        $kind: "DynamicObject" as const,
+                        fieldId: "0x" + "aa".repeat(32),
+                        type: "Field",
+                        name: {
+                            type: `${PACKAGE_ID}::bitcoin_state::BitcoinStateKey`,
+                            bcs: BitcoinStateKey.serialize({ dummy_field: false }).toBytes(),
+                        },
+                        valueType: "BitcoinState",
+                        childId: BTC_STATE_CHILD_ID,
+                    },
+                ],
+            } as never);
+            vi.spyOn(client.core, "getObject").mockResolvedValueOnce({
                 object: {
-                    objectId: "0x" + "bb".repeat(32),
+                    objectId: BTC_STATE_CHILD_ID,
                     version: "1",
                     digest: "mock",
                     owner: { $kind: "Shared", Shared: { initialSharedVersion: "1" } },
@@ -1036,10 +1055,29 @@ describe("HashiClient", () => {
             }).toBytes();
         }
 
+        const BTC_STATE_CHILD_ID = "0x" + "bb".repeat(32);
+
         function mockFetchBitcoinState() {
-            vi.spyOn(client.core, "getDynamicObjectField").mockResolvedValueOnce({
+            vi.spyOn(client.core, "listDynamicFields").mockResolvedValueOnce({
+                hasNextPage: false,
+                cursor: null,
+                dynamicFields: [
+                    {
+                        $kind: "DynamicObject" as const,
+                        fieldId: "0x" + "aa".repeat(32),
+                        type: "Field",
+                        name: {
+                            type: `${PACKAGE_ID}::bitcoin_state::BitcoinStateKey`,
+                            bcs: BitcoinStateKey.serialize({ dummy_field: false }).toBytes(),
+                        },
+                        valueType: "BitcoinState",
+                        childId: BTC_STATE_CHILD_ID,
+                    },
+                ],
+            } as never);
+            vi.spyOn(client.core, "getObject").mockResolvedValueOnce({
                 object: {
-                    objectId: "0x" + "bb".repeat(32),
+                    objectId: BTC_STATE_CHILD_ID,
                     version: "1",
                     digest: "mock",
                     owner: { $kind: "Shared", Shared: { initialSharedVersion: "1" } },
