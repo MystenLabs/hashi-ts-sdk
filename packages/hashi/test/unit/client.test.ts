@@ -8,8 +8,17 @@ import {
     InvalidParamsError,
 } from "../../src/errors.js";
 import { Hashi } from "../../src/contracts/hashi/hashi.js";
+import { BitcoinState } from "../../src/contracts/hashi/bitcoin_state.js";
+import { DepositRequest } from "../../src/contracts/hashi/deposit_queue.js";
+import {
+    WithdrawalRequest,
+    WithdrawalTransaction,
+} from "../../src/contracts/hashi/withdrawal_queue.js";
+import { Bag } from "../../src/contracts/hashi/deps/sui/bag.js";
 import { generateDepositAddress } from "../../src/bitcoin.js";
+import { reverseTxidBytes } from "../../src/util.js";
 import { SuiGrpcClient } from "@mysten/sui/grpc";
+import { bcs } from "@mysten/sui/bcs";
 import { Transaction } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
@@ -849,6 +858,430 @@ describe("HashiClient", () => {
                     expect(err).toBeInstanceOf(HashiConfigError);
                 }
             });
+        });
+    });
+
+    describe("view.findUsedUtxos", () => {
+        const ACTIVE_POOL_ID = "0x" + "a1".repeat(32);
+        const SPENT_POOL_ID = "0x" + "a2".repeat(32);
+        const TABLE_ID = "0x" + "a3".repeat(32);
+
+        /** BCS-encoded BitcoinState with known Bag/Table IDs. */
+        function mockBitcoinStateContent() {
+            const bagFields = (id: string) => ({ id, size: "0" });
+            const objectBagFields = (id: string) => ({ id, size: "0" });
+            return BitcoinState.serialize({
+                deposit_queue: {
+                    requests: objectBagFields("0x" + "d1".repeat(32)),
+                    processed: objectBagFields("0x" + "d2".repeat(32)),
+                },
+                withdrawal_queue: {
+                    requests: objectBagFields("0x" + "c1".repeat(32)),
+                    processed: objectBagFields("0x" + "c2".repeat(32)),
+                    withdrawal_txns: objectBagFields("0x" + "c3".repeat(32)),
+                    confirmed_txns: objectBagFields("0x" + "c4".repeat(32)),
+                },
+                utxo_pool: {
+                    utxo_records: bagFields(ACTIVE_POOL_ID),
+                    spent_utxos: bagFields(SPENT_POOL_ID),
+                },
+                user_requests: bagFields(TABLE_ID),
+            }).toBytes();
+        }
+
+        function mockFetchBitcoinState() {
+            vi.spyOn(client.core, "getDynamicObjectField").mockResolvedValueOnce({
+                object: {
+                    objectId: "0x" + "bb".repeat(32),
+                    version: "1",
+                    digest: "mock",
+                    owner: { $kind: "Shared", Shared: { initialSharedVersion: "1" } },
+                    type: "mock::BitcoinState",
+                    content: mockBitcoinStateContent(),
+                    previousTransaction: undefined,
+                    objectBcs: undefined,
+                    json: undefined,
+                    display: undefined,
+                },
+            } as never);
+        }
+
+        it("returns empty array for empty input", async () => {
+            const result = await client.hashi.view.findUsedUtxos([]);
+            expect(result).toEqual([]);
+        });
+
+        it("marks a UTXO as used when it exists in the active pool", async () => {
+            mockFetchBitcoinState();
+            const getObjectsSpy = vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
+                objects: [
+                    // active pool — found
+                    { objectId: "0x01", type: "Field", version: "1", digest: "d", owner: {} },
+                    // spent pool — not found
+                    new Error("not found"),
+                ],
+            } as never);
+
+            const result = await client.hashi.view.findUsedUtxos([
+                { txid: "0x" + "ab".repeat(32), vout: 0 },
+            ]);
+
+            expect(result).toHaveLength(1);
+            expect(result[0].inActivePool).toBe(true);
+            expect(result[0].inSpentPool).toBe(false);
+            expect(result[0].isUsed).toBe(true);
+            expect(result[0].utxoId).toEqual({ txid: "0x" + "ab".repeat(32), vout: 0 });
+            expect(getObjectsSpy).toHaveBeenCalledTimes(1);
+        });
+
+        it("marks a UTXO as used when it exists in the spent pool", async () => {
+            mockFetchBitcoinState();
+            vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
+                objects: [
+                    new Error("not found"), // active pool
+                    { objectId: "0x01", type: "Field", version: "1", digest: "d", owner: {} }, // spent pool
+                ],
+            } as never);
+
+            const result = await client.hashi.view.findUsedUtxos([
+                { txid: "0x" + "cd".repeat(32), vout: 1 },
+            ]);
+
+            expect(result[0].inActivePool).toBe(false);
+            expect(result[0].inSpentPool).toBe(true);
+            expect(result[0].isUsed).toBe(true);
+        });
+
+        it("marks a UTXO as not used when absent from both pools", async () => {
+            mockFetchBitcoinState();
+            vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
+                objects: [new Error("not found"), new Error("not found")],
+            } as never);
+
+            const result = await client.hashi.view.findUsedUtxos([
+                { txid: "0x" + "ff".repeat(32), vout: 99 },
+            ]);
+
+            expect(result[0].inActivePool).toBe(false);
+            expect(result[0].inSpentPool).toBe(false);
+            expect(result[0].isUsed).toBe(false);
+        });
+
+        it("handles multiple UTXOs in a single batch", async () => {
+            mockFetchBitcoinState();
+            vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
+                objects: [
+                    // UTXO 0: active=found, spent=not found
+                    { objectId: "0x01", type: "F", version: "1", digest: "d", owner: {} },
+                    new Error("not found"),
+                    // UTXO 1: active=not found, spent=not found
+                    new Error("not found"),
+                    new Error("not found"),
+                    // UTXO 2: active=found, spent=found (both)
+                    { objectId: "0x02", type: "F", version: "1", digest: "d", owner: {} },
+                    { objectId: "0x03", type: "F", version: "1", digest: "d", owner: {} },
+                ],
+            } as never);
+
+            const result = await client.hashi.view.findUsedUtxos([
+                { txid: "0x" + "01".repeat(32), vout: 0 },
+                { txid: "0x" + "02".repeat(32), vout: 1 },
+                { txid: "0x" + "03".repeat(32), vout: 2 },
+            ]);
+
+            expect(result).toHaveLength(3);
+            expect(result[0]).toMatchObject({ isUsed: true, inActivePool: true, inSpentPool: false });
+            expect(result[1]).toMatchObject({
+                isUsed: false,
+                inActivePool: false,
+                inSpentPool: false,
+            });
+            expect(result[2]).toMatchObject({ isUsed: true, inActivePool: true, inSpentPool: true });
+        });
+    });
+
+    describe("view.transactionHistory", () => {
+        const ACTIVE_POOL_ID = "0x" + "a1".repeat(32);
+        const SPENT_POOL_ID = "0x" + "a2".repeat(32);
+        const TABLE_ID = "0x" + "a3".repeat(32);
+        const USER_BAG_ID = "0x" + "b1".repeat(32);
+
+        const DEPOSIT_REQUEST_ID = "0x" + "d0".repeat(32);
+        const WITHDRAWAL_REQUEST_ID = "0x" + "e0".repeat(32);
+        const WITHDRAWAL_TXN_ID = "0x" + "f0".repeat(32);
+
+        // A display-order txid and its internal (reversed) form.
+        const DISPLAY_TXID = "0x" + "ab".repeat(32);
+        const INTERNAL_TXID = reverseTxidBytes(DISPLAY_TXID);
+
+        function mockBitcoinStateContent() {
+            const bagFields = (id: string) => ({ id, size: "0" });
+            const objectBagFields = (id: string) => ({ id, size: "0" });
+            return BitcoinState.serialize({
+                deposit_queue: {
+                    requests: objectBagFields("0x" + "d1".repeat(32)),
+                    processed: objectBagFields("0x" + "d2".repeat(32)),
+                },
+                withdrawal_queue: {
+                    requests: objectBagFields("0x" + "c1".repeat(32)),
+                    processed: objectBagFields("0x" + "c2".repeat(32)),
+                    withdrawal_txns: objectBagFields("0x" + "c3".repeat(32)),
+                    confirmed_txns: objectBagFields("0x" + "c4".repeat(32)),
+                },
+                utxo_pool: {
+                    utxo_records: bagFields(ACTIVE_POOL_ID),
+                    spent_utxos: bagFields(SPENT_POOL_ID),
+                },
+                user_requests: bagFields(TABLE_ID),
+            }).toBytes();
+        }
+
+        function mockFetchBitcoinState() {
+            vi.spyOn(client.core, "getDynamicObjectField").mockResolvedValueOnce({
+                object: {
+                    objectId: "0x" + "bb".repeat(32),
+                    version: "1",
+                    digest: "mock",
+                    owner: { $kind: "Shared", Shared: { initialSharedVersion: "1" } },
+                    type: "mock::BitcoinState",
+                    content: mockBitcoinStateContent(),
+                    previousTransaction: undefined,
+                    objectBcs: undefined,
+                    json: undefined,
+                    display: undefined,
+                },
+            } as never);
+        }
+
+        function mockUserBagLookup() {
+            vi.spyOn(client.core, "getDynamicField").mockResolvedValueOnce({
+                dynamicField: {
+                    $kind: "DynamicField",
+                    fieldId: "0x" + "cc".repeat(32),
+                    type: "Field<address, Bag>",
+                    name: { type: "address", bcs: new Uint8Array(32) },
+                    valueType: "0x2::bag::Bag",
+                    value: {
+                        type: "0x2::bag::Bag",
+                        bcs: Bag.serialize({ id: USER_BAG_ID, size: "2" }).toBytes(),
+                    },
+                    version: "1",
+                    digest: "mock",
+                    previousTransaction: null,
+                },
+            } as never);
+        }
+
+        function mockListDynamicFields(requestIds: string[]) {
+            vi.spyOn(client.core, "listDynamicFields").mockResolvedValueOnce({
+                hasNextPage: false,
+                cursor: null,
+                dynamicFields: requestIds.map((id) => ({
+                    $kind: "DynamicField" as const,
+                    fieldId: "0x" + "ff".repeat(32),
+                    type: "Field<address, bool>",
+                    name: {
+                        type: "address",
+                        bcs: bcs.Address.serialize(id).toBytes(),
+                    },
+                    valueType: "bool",
+                })),
+            } as never);
+        }
+
+        function mockDepositRequestObject() {
+            return {
+                objectId: DEPOSIT_REQUEST_ID,
+                version: "1",
+                digest: "mock",
+                owner: { $kind: "ObjectOwner", ObjectOwner: "0x00" },
+                type: `${PACKAGE_ID}::deposit_queue::DepositRequest`,
+                content: DepositRequest.serialize({
+                    id: DEPOSIT_REQUEST_ID,
+                    sender: TEST_SUI_ADDRESS,
+                    timestamp_ms: "1000",
+                    sui_tx_digest: Array.from(new Uint8Array(32).fill(0xdd)),
+                    utxo: {
+                        id: { txid: INTERNAL_TXID, vout: 7 },
+                        amount: "50000",
+                        derivation_path: TEST_SUI_ADDRESS,
+                    },
+                    approval_cert: null,
+                    approval_timestamp_ms: null,
+                }).toBytes(),
+                previousTransaction: undefined,
+                objectBcs: undefined,
+                json: undefined,
+                display: undefined,
+            };
+        }
+
+        function mockWithdrawalRequestObject(opts?: { withdrawalTxnId?: string | null }) {
+            return {
+                objectId: WITHDRAWAL_REQUEST_ID,
+                version: "1",
+                digest: "mock",
+                owner: { $kind: "ObjectOwner", ObjectOwner: "0x00" },
+                type: `${PACKAGE_ID}::withdrawal_queue::WithdrawalRequest`,
+                content: WithdrawalRequest.serialize({
+                    id: WITHDRAWAL_REQUEST_ID,
+                    sender: TEST_SUI_ADDRESS,
+                    btc_amount: "30000",
+                    bitcoin_address: Array.from(new Uint8Array(32).fill(0xcc)),
+                    timestamp_ms: "2000",
+                    status: { $kind: "Requested", Requested: true },
+                    withdrawal_txn_id: opts?.withdrawalTxnId ?? null,
+                    sui_tx_digest: Array.from(new Uint8Array(32).fill(0xee)),
+                    btc: { value: "30000" },
+                }).toBytes(),
+                previousTransaction: undefined,
+                objectBcs: undefined,
+                json: undefined,
+                display: undefined,
+            };
+        }
+
+        it("returns empty array when the user has no entry in user_requests", async () => {
+            mockFetchBitcoinState();
+            vi.spyOn(client.core, "getDynamicField").mockRejectedValueOnce(
+                new Error("not found"),
+            );
+
+            const items = await client.hashi.view.transactionHistory(TEST_SUI_ADDRESS);
+            expect(items).toEqual([]);
+        });
+
+        it("maps a DepositRequest with btcTxid in display order and btcVout", async () => {
+            mockFetchBitcoinState();
+            mockUserBagLookup();
+            mockListDynamicFields([DEPOSIT_REQUEST_ID]);
+            vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
+                objects: [mockDepositRequestObject()],
+            } as never);
+
+            const items = await client.hashi.view.transactionHistory(TEST_SUI_ADDRESS);
+
+            expect(items).toHaveLength(1);
+            const dep = items[0];
+            expect(dep.kind).toBe("deposit");
+            if (dep.kind !== "deposit") throw new Error("expected deposit");
+
+            expect(dep.requestId).toBe(DEPOSIT_REQUEST_ID);
+            expect(dep.sender).toBe(TEST_SUI_ADDRESS);
+            expect(dep.btcTxid).toBe(DISPLAY_TXID);
+            expect(dep.btcVout).toBe(7);
+            expect(dep.amountSats).toBe(50_000n);
+            expect(dep.approved).toBe(false);
+            expect(dep.approvalTimestampMs).toBeNull();
+            expect(dep.timestampMs).toBe(1_000n);
+        });
+
+        it("maps a WithdrawalRequest with status and null btcTxid", async () => {
+            mockFetchBitcoinState();
+            mockUserBagLookup();
+            mockListDynamicFields([WITHDRAWAL_REQUEST_ID]);
+            vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
+                objects: [mockWithdrawalRequestObject()],
+            } as never);
+
+            const items = await client.hashi.view.transactionHistory(TEST_SUI_ADDRESS);
+
+            expect(items).toHaveLength(1);
+            const wd = items[0];
+            expect(wd.kind).toBe("withdrawal");
+            if (wd.kind !== "withdrawal") throw new Error("expected withdrawal");
+
+            expect(wd.requestId).toBe(WITHDRAWAL_REQUEST_ID);
+            expect(wd.sender).toBe(TEST_SUI_ADDRESS);
+            expect(wd.status).toBe("Requested");
+            expect(wd.btcAmountSats).toBe(30_000n);
+            expect(wd.btcTxid).toBeNull();
+            expect(wd.withdrawalTxnId).toBeNull();
+        });
+
+        it("fetches WithdrawalTransaction to populate btcTxid when withdrawal_txn_id is set", async () => {
+            mockFetchBitcoinState();
+            mockUserBagLookup();
+            mockListDynamicFields([WITHDRAWAL_REQUEST_ID]);
+
+            const BTC_TXID_INTERNAL = "0x" + "99".repeat(32);
+            const BTC_TXID_DISPLAY = reverseTxidBytes(BTC_TXID_INTERNAL);
+
+            const getObjectsSpy = vi.spyOn(client.core, "getObjects");
+
+            // First call: fetch request objects
+            getObjectsSpy.mockResolvedValueOnce({
+                objects: [
+                    mockWithdrawalRequestObject({ withdrawalTxnId: WITHDRAWAL_TXN_ID }),
+                ],
+            } as never);
+
+            // Second call: fetch WithdrawalTransaction objects
+            getObjectsSpy.mockResolvedValueOnce({
+                objects: [
+                    {
+                        objectId: WITHDRAWAL_TXN_ID,
+                        version: "1",
+                        digest: "mock",
+                        owner: { $kind: "ObjectOwner", ObjectOwner: "0x00" },
+                        type: `${PACKAGE_ID}::withdrawal_queue::WithdrawalTransaction`,
+                        content: WithdrawalTransaction.serialize({
+                            id: WITHDRAWAL_TXN_ID,
+                            txid: BTC_TXID_INTERNAL,
+                            request_ids: [WITHDRAWAL_REQUEST_ID],
+                            inputs: [],
+                            withdrawal_outputs: [],
+                            change_output: null,
+                            timestamp_ms: "3000",
+                            randomness: [],
+                            signatures: null,
+                            presig_start_index: "0",
+                            epoch: "1",
+                        }).toBytes(),
+                        previousTransaction: undefined,
+                        objectBcs: undefined,
+                        json: undefined,
+                        display: undefined,
+                    },
+                ],
+            } as never);
+
+            const items = await client.hashi.view.transactionHistory(TEST_SUI_ADDRESS);
+
+            expect(items).toHaveLength(1);
+            const wd = items[0];
+            if (wd.kind !== "withdrawal") throw new Error("expected withdrawal");
+            expect(wd.btcTxid).toBe(BTC_TXID_DISPLAY);
+            expect(wd.withdrawalTxnId).toBe(WITHDRAWAL_TXN_ID);
+            expect(getObjectsSpy).toHaveBeenCalledTimes(2);
+        });
+
+        it("returns mixed deposit and withdrawal items", async () => {
+            mockFetchBitcoinState();
+            mockUserBagLookup();
+            mockListDynamicFields([DEPOSIT_REQUEST_ID, WITHDRAWAL_REQUEST_ID]);
+            vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
+                objects: [mockDepositRequestObject(), mockWithdrawalRequestObject()],
+            } as never);
+
+            const items = await client.hashi.view.transactionHistory(TEST_SUI_ADDRESS);
+
+            expect(items).toHaveLength(2);
+            expect(items[0].kind).toBe("deposit");
+            expect(items[1].kind).toBe("withdrawal");
+        });
+
+        it("skips Error objects in the batch response", async () => {
+            mockFetchBitcoinState();
+            mockUserBagLookup();
+            mockListDynamicFields([DEPOSIT_REQUEST_ID, "0x" + "00".repeat(32)]);
+            vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
+                objects: [mockDepositRequestObject(), new Error("deleted")],
+            } as never);
+
+            const items = await client.hashi.view.transactionHistory(TEST_SUI_ADDRESS);
+            expect(items).toHaveLength(1);
+            expect(items[0].kind).toBe("deposit");
         });
     });
 
