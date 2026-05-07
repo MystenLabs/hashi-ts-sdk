@@ -24,6 +24,12 @@ export const Committee = new MoveStruct({
         members: bcs.vector(CommitteeMember),
         /** Total voting weight of the committee. */
         total_weight: bcs.u64(),
+        /** MPC threshold in basis points */
+        mpc_threshold_in_basis_points: bcs.u64(),
+        /** Allowed delta for weight reduction */
+        mpc_weight_reduction_allowed_delta: bcs.u64(),
+        /** MPC max faulty parties in basis points */
+        mpc_max_faulty_in_basis_points: bcs.u64(),
     },
 });
 export const CommitteeSignature = new MoveStruct({

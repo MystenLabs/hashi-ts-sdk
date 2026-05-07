@@ -2,7 +2,7 @@
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
 import { MoveStruct } from "../utils/index.js";
-import { bcs } from "@mysten/sui/bcs";
+import { bcs, type BcsType } from "@mysten/sui/bcs";
 const $moduleName = "@local-pkg/hashi::proposal_events";
 export const ProposalCreatedEvent = new MoveStruct({
     name: `${$moduleName}::ProposalCreatedEvent<phantom T>`,
@@ -31,12 +31,15 @@ export const ProposalDeletedEvent = new MoveStruct({
         proposal_id: bcs.Address,
     },
 });
-export const ProposalExecutedEvent = new MoveStruct({
-    name: `${$moduleName}::ProposalExecutedEvent<phantom T>`,
-    fields: {
-        proposal_id: bcs.Address,
-    },
-});
+export function ProposalExecutedEvent<T extends BcsType<any>>(...typeParameters: [T]) {
+    return new MoveStruct({
+        name: `${$moduleName}::ProposalExecutedEvent<${typeParameters[0].name as T["name"]}>`,
+        fields: {
+            proposal_id: bcs.Address,
+            data: typeParameters[0],
+        },
+    });
+}
 export const QuorumReachedEvent = new MoveStruct({
     name: `${$moduleName}::QuorumReachedEvent<phantom T>`,
     fields: {

@@ -10,8 +10,8 @@ import { type Transaction } from "@mysten/sui/transactions";
 import * as committee_set from "./committee_set.js";
 import * as config from "./config.js";
 import * as treasury from "./treasury.js";
+import * as proposals from "./proposals.js";
 import * as bag from "./deps/sui/bag.js";
-import * as bag_1 from "./deps/sui/bag.js";
 const $moduleName = "@local-pkg/hashi::hashi";
 export const Hashi = new MoveStruct({
     name: `${$moduleName}::Hashi`,
@@ -20,9 +20,9 @@ export const Hashi = new MoveStruct({
         committee_set: committee_set.CommitteeSet,
         config: config.Config,
         treasury: treasury.Treasury,
-        proposals: bag.Bag,
+        proposals: proposals.Proposals,
         /** TOB certificates by (epoch, batch_index) -> EpochCertsV1 */
-        tob: bag_1.Bag,
+        tob: bag.Bag,
         /**
          * Number of presignatures consumed in the current epoch. Used by recovering nodes
          * to derive `(batch_index, index_in_batch)`.
