@@ -889,38 +889,24 @@ describe("HashiClient", () => {
             }).toBytes();
         }
 
-        const BTC_STATE_CHILD_ID = "0x" + "bb".repeat(32);
-
         function mockFetchBitcoinState() {
-            vi.spyOn(client.core, "listDynamicFields").mockResolvedValueOnce({
-                hasNextPage: false,
-                cursor: null,
-                dynamicFields: [
-                    {
-                        $kind: "DynamicObject" as const,
-                        fieldId: "0x" + "aa".repeat(32),
-                        type: "Field",
-                        name: {
-                            type: `${PACKAGE_ID}::bitcoin_state::BitcoinStateKey`,
-                            bcs: BitcoinStateKey.serialize({ dummy_field: false }).toBytes(),
-                        },
-                        valueType: "BitcoinState",
-                        childId: BTC_STATE_CHILD_ID,
+            vi.spyOn(client.core, "getDynamicField").mockResolvedValueOnce({
+                dynamicField: {
+                    $kind: "DynamicField",
+                    fieldId: "0x" + "aa".repeat(32),
+                    type: `0x2::dynamic_field::Field<${PACKAGE_ID}::bitcoin_state::BitcoinStateKey, ${PACKAGE_ID}::bitcoin_state::BitcoinState>`,
+                    name: {
+                        type: `${PACKAGE_ID}::bitcoin_state::BitcoinStateKey`,
+                        bcs: BitcoinStateKey.serialize({ dummy_field: false }).toBytes(),
                     },
-                ],
-            } as never);
-            vi.spyOn(client.core, "getObject").mockResolvedValueOnce({
-                object: {
-                    objectId: BTC_STATE_CHILD_ID,
+                    valueType: `${PACKAGE_ID}::bitcoin_state::BitcoinState`,
+                    value: {
+                        type: `${PACKAGE_ID}::bitcoin_state::BitcoinState`,
+                        bcs: mockBitcoinStateContent(),
+                    },
                     version: "1",
                     digest: "mock",
-                    owner: { $kind: "Shared", Shared: { initialSharedVersion: "1" } },
-                    type: "mock::BitcoinState",
-                    content: mockBitcoinStateContent(),
-                    previousTransaction: undefined,
-                    objectBcs: undefined,
-                    json: undefined,
-                    display: undefined,
+                    previousTransaction: null,
                 },
             } as never);
         }
@@ -1055,38 +1041,24 @@ describe("HashiClient", () => {
             }).toBytes();
         }
 
-        const BTC_STATE_CHILD_ID = "0x" + "bb".repeat(32);
-
         function mockFetchBitcoinState() {
-            vi.spyOn(client.core, "listDynamicFields").mockResolvedValueOnce({
-                hasNextPage: false,
-                cursor: null,
-                dynamicFields: [
-                    {
-                        $kind: "DynamicObject" as const,
-                        fieldId: "0x" + "aa".repeat(32),
-                        type: "Field",
-                        name: {
-                            type: `${PACKAGE_ID}::bitcoin_state::BitcoinStateKey`,
-                            bcs: BitcoinStateKey.serialize({ dummy_field: false }).toBytes(),
-                        },
-                        valueType: "BitcoinState",
-                        childId: BTC_STATE_CHILD_ID,
+            vi.spyOn(client.core, "getDynamicField").mockResolvedValueOnce({
+                dynamicField: {
+                    $kind: "DynamicField",
+                    fieldId: "0x" + "aa".repeat(32),
+                    type: `0x2::dynamic_field::Field<${PACKAGE_ID}::bitcoin_state::BitcoinStateKey, ${PACKAGE_ID}::bitcoin_state::BitcoinState>`,
+                    name: {
+                        type: `${PACKAGE_ID}::bitcoin_state::BitcoinStateKey`,
+                        bcs: BitcoinStateKey.serialize({ dummy_field: false }).toBytes(),
                     },
-                ],
-            } as never);
-            vi.spyOn(client.core, "getObject").mockResolvedValueOnce({
-                object: {
-                    objectId: BTC_STATE_CHILD_ID,
+                    valueType: `${PACKAGE_ID}::bitcoin_state::BitcoinState`,
+                    value: {
+                        type: `${PACKAGE_ID}::bitcoin_state::BitcoinState`,
+                        bcs: mockBitcoinStateContent(),
+                    },
                     version: "1",
                     digest: "mock",
-                    owner: { $kind: "Shared", Shared: { initialSharedVersion: "1" } },
-                    type: "mock::BitcoinState",
-                    content: mockBitcoinStateContent(),
-                    previousTransaction: undefined,
-                    objectBcs: undefined,
-                    json: undefined,
-                    display: undefined,
+                    previousTransaction: null,
                 },
             } as never);
         }

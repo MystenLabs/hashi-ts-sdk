@@ -4,7 +4,7 @@ import { bcs, TypeTagSerializer } from "@mysten/sui/bcs";
 import { fromHex, toHex, deriveDynamicFieldID } from "@mysten/sui/utils";
 import { Transaction, coinWithBalance } from "@mysten/sui/transactions";
 import { Hashi } from "./contracts/hashi/hashi.js";
-import { BitcoinState } from "./contracts/hashi/bitcoin_state.js";
+import { BitcoinState, BitcoinStateKey } from "./contracts/hashi/bitcoin_state.js";
 import { DepositRequest } from "./contracts/hashi/deposit_queue.js";
 import { WithdrawalRequest, WithdrawalTransaction } from "./contracts/hashi/withdrawal_queue.js";
 import { UtxoId as UtxoIdBcs } from "./contracts/hashi/utxo.js";
@@ -806,49 +806,26 @@ export class HashiClient {
     // ------------------------------------------------------------------
 
     /**
-     * Fetches the `BitcoinState` dynamic object field from the Hashi shared
-     * object. Returns the BCS-parsed struct whose nested Bag/Table IDs are
-     * used by `findUsedUtxos` and `transactionHistory`.
+     * Fetches the `BitcoinState` dynamic field from the Hashi shared object.
+     * Returns the BCS-parsed struct whose nested Bag/Table IDs are used by
+     * `findUsedUtxos` and `transactionHistory`.
      *
-     * Uses `listDynamicFields` + `getObject` rather than `getDynamicObjectField`
-     * to avoid field-ID derivation mismatches across transports (the gRPC
-     * client's `deriveDynamicFieldID` requires exact type-tag normalization
-     * including MVR resolution, which can diverge on localnet / CI).
+     * `BitcoinState` is attached via `df::add` on the Move side (it has
+     * `store` only, not `key`), so the regular-DF accessor is the right tool
+     * — `getDynamicObjectField` would look for a `dynamic_object_field::
+     * Wrapper<BitcoinStateKey>` that doesn't exist and abort with "not
+     * found". The previous `listDynamicFields` workaround filtered for
+     * `$kind === "DynamicObject"` and hit the same dof/df mismatch.
      */
     async #fetchBitcoinState() {
-        // 1. Discover the BitcoinState child object ID via listDynamicFields.
-        let childId: string | undefined;
-        let cursor: string | null = null;
-        outer: do {
-            const page = await this.#client.core.listDynamicFields({
-                parentId: this.#hashiObjectId,
-                cursor: cursor ?? undefined,
-            });
-            for (const entry of page.dynamicFields) {
-                if (
-                    entry.$kind === "DynamicObject" &&
-                    entry.name.type.includes("BitcoinStateKey")
-                ) {
-                    childId = entry.childId;
-                    break outer;
-                }
-            }
-            cursor = page.hasNextPage ? page.cursor : null;
-        } while (cursor);
-
-        if (!childId) {
-            throw new HashiFetchError(
-                `BitcoinState dynamic field not found on Hashi object ${this.#hashiObjectId}.`,
-                this.#hashiObjectId,
-            );
-        }
-
-        // 2. Fetch the child object and parse its BCS content.
-        const { object } = await this.#client.core.getObject({
-            objectId: childId,
-            include: { content: true },
+        const { dynamicField } = await this.#client.core.getDynamicField({
+            parentId: this.#hashiObjectId,
+            name: {
+                type: `${this.#packageId}::bitcoin_state::BitcoinStateKey`,
+                bcs: BitcoinStateKey.serialize({ dummy_field: false }).toBytes(),
+            },
         });
-        return BitcoinState.parse(object.content!);
+        return BitcoinState.parse(new Uint8Array(dynamicField.value.bcs));
     }
 
     /**
