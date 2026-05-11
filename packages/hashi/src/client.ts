@@ -50,6 +50,22 @@ const U32_MAX = 0xffffffff;
 /** Max objects per `getObjects` call — Sui transports typically cap at 50. */
 const GET_OBJECTS_BATCH = 50;
 
+/**
+ * Recognize the JSON-RPC `ObjectError` codes that correspond to "the object
+ * (or dynamic field) genuinely does not exist" — the only Error shape that
+ * `findUsedUtxos` is allowed to treat as a pool miss. Any other error
+ * (deleted, displayError, unknown, gRPC plain `Error` without a `code`, or a
+ * transport-level failure) must propagate so a transient RPC issue can't be
+ * silently downgraded to "not used."
+ *
+ * `ObjectError` is not re-exported from `@mysten/sui/client`, so this guard
+ * duck-types the `code` field instead of using `instanceof`.
+ */
+function isObjectNotFoundError(err: Error): boolean {
+    const code = (err as Error & { code?: unknown }).code;
+    return code === "notExists" || code === "dynamicFieldNotFound";
+}
+
 export function hashi<const Name = "hashi">({
     name = "hashi" as Name,
     ...options
@@ -646,6 +662,11 @@ export class HashiClient {
          *
          * `txid` in each `UtxoId` is **display byte order**; the method
          * reverses to internal byte order before encoding the on-chain key.
+         *
+         * Throws on any RPC failure that isn't a clean "object does not
+         * exist" — a transient transport error must not be downgraded to
+         * `isUsed: false`, because that could lead a caller to re-spend an
+         * already-used UTXO.
          */
         findUsedUtxos: async (utxos: readonly UtxoId[]): Promise<UtxoUsageResult[]> => {
             if (utxos.length === 0) return [];
@@ -671,6 +692,23 @@ export class HashiClient {
 
             // Batch-fetch — existence test only, no content needed.
             const objects = await this.#batchGetObjects(fieldIds);
+
+            if (objects.length !== fieldIds.length) {
+                throw new HashiFetchError(
+                    `findUsedUtxos: getObjects returned ${objects.length} results, expected ${fieldIds.length}`,
+                    this.#hashiObjectId,
+                );
+            }
+
+            // Only "object not found" errors mean the UTXO is absent from a
+            // pool. Anything else (transient RPC failure, unexpected code,
+            // opaque gRPC Error) must propagate — otherwise callers could
+            // silently treat a still-used UTXO as free and re-spend it.
+            for (const result of objects) {
+                if (result instanceof Error && !isObjectNotFoundError(result)) {
+                    throw result;
+                }
+            }
 
             return utxos.map((u, i) => {
                 const inActivePool = !(objects[i * 2] instanceof Error);
@@ -739,9 +777,12 @@ export class HashiClient {
             // so we can batch-fetch their WithdrawalTransaction objects.
             const withdrawalTxnLookups: { itemIndex: number; txnId: string }[] = [];
 
+            const depositRequestType = `${this.#packageId}::deposit_queue::DepositRequest`;
+            const withdrawalRequestType = `${this.#packageId}::withdrawal_queue::WithdrawalRequest`;
+
             for (const obj of objects) {
                 if (obj instanceof Error) continue;
-                if (obj.type.includes("::deposit_queue::DepositRequest")) {
+                if (obj.type === depositRequestType) {
                     const parsed = DepositRequest.parse(obj.content!);
                     items.push({
                         kind: "deposit",
@@ -758,7 +799,7 @@ export class HashiClient {
                                 ? BigInt(parsed.approval_timestamp_ms)
                                 : null,
                     } satisfies DepositHistoryItem);
-                } else if (obj.type.includes("::withdrawal_queue::WithdrawalRequest")) {
+                } else if (obj.type === withdrawalRequestType) {
                     const parsed = WithdrawalRequest.parse(obj.content!);
                     const txnId = parsed.withdrawal_txn_id ?? null;
                     items.push({

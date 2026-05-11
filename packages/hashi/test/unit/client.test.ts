@@ -866,6 +866,9 @@ describe("HashiClient", () => {
         const SPENT_POOL_ID = "0x" + "a2".repeat(32);
         const TABLE_ID = "0x" + "a3".repeat(32);
 
+        /** Mirror @mysten/sui's JSON-RPC `ObjectError` shape for "not found." */
+        const notFoundError = () => Object.assign(new Error("not found"), { code: "notExists" });
+
         /** BCS-encoded BitcoinState with known Bag/Table IDs. */
         function mockBitcoinStateContent() {
             const bagFields = (id: string) => ({ id, size: "0" });
@@ -923,7 +926,7 @@ describe("HashiClient", () => {
                     // active pool — found
                     { objectId: "0x01", type: "Field", version: "1", digest: "d", owner: {} },
                     // spent pool — not found
-                    new Error("not found"),
+                    notFoundError(),
                 ],
             } as never);
 
@@ -943,7 +946,7 @@ describe("HashiClient", () => {
             mockFetchBitcoinState();
             vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
                 objects: [
-                    new Error("not found"), // active pool
+                    notFoundError(), // active pool
                     { objectId: "0x01", type: "Field", version: "1", digest: "d", owner: {} }, // spent pool
                 ],
             } as never);
@@ -960,7 +963,7 @@ describe("HashiClient", () => {
         it("marks a UTXO as not used when absent from both pools", async () => {
             mockFetchBitcoinState();
             vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
-                objects: [new Error("not found"), new Error("not found")],
+                objects: [notFoundError(), notFoundError()],
             } as never);
 
             const result = await client.hashi.view.findUsedUtxos([
@@ -978,10 +981,10 @@ describe("HashiClient", () => {
                 objects: [
                     // UTXO 0: active=found, spent=not found
                     { objectId: "0x01", type: "F", version: "1", digest: "d", owner: {} },
-                    new Error("not found"),
+                    notFoundError(),
                     // UTXO 1: active=not found, spent=not found
-                    new Error("not found"),
-                    new Error("not found"),
+                    notFoundError(),
+                    notFoundError(),
                     // UTXO 2: active=found, spent=found (both)
                     { objectId: "0x02", type: "F", version: "1", digest: "d", owner: {} },
                     { objectId: "0x03", type: "F", version: "1", digest: "d", owner: {} },
@@ -1002,6 +1005,43 @@ describe("HashiClient", () => {
                 inSpentPool: false,
             });
             expect(result[2]).toMatchObject({ isUsed: true, inActivePool: true, inSpentPool: true });
+        });
+
+        it("rethrows an RPC error that isn't a 'not found' code", async () => {
+            mockFetchBitcoinState();
+            vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
+                objects: [
+                    notFoundError(),
+                    Object.assign(new Error("internal server error"), { code: "unknown" }),
+                ],
+            } as never);
+
+            await expect(
+                client.hashi.view.findUsedUtxos([{ txid: "0x" + "ab".repeat(32), vout: 0 }]),
+            ).rejects.toThrow("internal server error");
+        });
+
+        it("rethrows a plain Error without a code (e.g. gRPC transport error)", async () => {
+            mockFetchBitcoinState();
+            vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
+                objects: [new Error("opaque transport failure"), notFoundError()],
+            } as never);
+
+            await expect(
+                client.hashi.view.findUsedUtxos([{ txid: "0x" + "ab".repeat(32), vout: 0 }]),
+            ).rejects.toThrow("opaque transport failure");
+        });
+
+        it("throws HashiFetchError when getObjects returns a wrong-length response", async () => {
+            mockFetchBitcoinState();
+            // Expecting 2 results (one UTXO × 2 pools), mock only returns 1.
+            vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
+                objects: [notFoundError()],
+            } as never);
+
+            await expect(
+                client.hashi.view.findUsedUtxos([{ txid: "0x" + "ab".repeat(32), vout: 0 }]),
+            ).rejects.toThrow(/expected 2/);
         });
     });
 
@@ -1292,6 +1332,25 @@ describe("HashiClient", () => {
             const items = await client.hashi.view.transactionHistory(TEST_SUI_ADDRESS);
             expect(items).toHaveLength(1);
             expect(items[0].kind).toBe("deposit");
+        });
+
+        it("ignores objects whose type matches the module name but a different package", async () => {
+            mockFetchBitcoinState();
+            mockUserBagLookup();
+            mockListDynamicFields([DEPOSIT_REQUEST_ID]);
+            // Same module/struct names but a foreign package — must not be classified.
+            const FOREIGN_PKG = "0x" + "ee".repeat(32);
+            vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
+                objects: [
+                    {
+                        ...mockDepositRequestObject(),
+                        type: `${FOREIGN_PKG}::deposit_queue::DepositRequest`,
+                    },
+                ],
+            } as never);
+
+            const items = await client.hashi.view.transactionHistory(TEST_SUI_ADDRESS);
+            expect(items).toEqual([]);
         });
     });
 
