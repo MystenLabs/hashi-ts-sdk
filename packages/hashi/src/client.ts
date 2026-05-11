@@ -51,19 +51,30 @@ const U32_MAX = 0xffffffff;
 const GET_OBJECTS_BATCH = 50;
 
 /**
- * Recognize the JSON-RPC `ObjectError` codes that correspond to "the object
- * (or dynamic field) genuinely does not exist" — the only Error shape that
- * `findUsedUtxos` is allowed to treat as a pool miss. Any other error
- * (deleted, displayError, unknown, gRPC plain `Error` without a `code`, or a
- * transport-level failure) must propagate so a transient RPC issue can't be
- * silently downgraded to "not used."
+ * Recognize the per-object errors that mean "the object (or dynamic field)
+ * genuinely does not exist" — the only Error shape that `findUsedUtxos` is
+ * allowed to treat as a pool miss. Anything else (deleted, displayError,
+ * unknown) must propagate so other per-object failures can't be silently
+ * downgraded to "not used."
  *
- * `ObjectError` is not re-exported from `@mysten/sui/client`, so this guard
- * duck-types the `code` field instead of using `instanceof`.
+ * Two transports, two shapes:
+ * - JSON-RPC returns a typed `ObjectError` whose `.code` is `notExists` or
+ *   `dynamicFieldNotFound`. `ObjectError` is not re-exported from
+ *   `@mysten/sui/client`, so the guard duck-types the field.
+ * - gRPC stringifies the per-object error into `new Error(message)` with no
+ *   code (see the `TODO: improve error handling` in `@mysten/sui/grpc/core.ts`).
+ *   For now the only signal is the message, which the Sui ledger service
+ *   returns as exactly `Object <id> not found` for missing objects.
+ *
+ * Transport-level failures don't show up here — they reject the whole
+ * `getObjects` promise rather than appearing in the result array.
  */
+const GRPC_NOT_FOUND_MESSAGE_RE = /^Object 0x[0-9a-f]+ not found$/i;
+
 function isObjectNotFoundError(err: Error): boolean {
     const code = (err as Error & { code?: unknown }).code;
-    return code === "notExists" || code === "dynamicFieldNotFound";
+    if (code === "notExists" || code === "dynamicFieldNotFound") return true;
+    return code === undefined && GRPC_NOT_FOUND_MESSAGE_RE.test(err.message);
 }
 
 export function hashi<const Name = "hashi">({

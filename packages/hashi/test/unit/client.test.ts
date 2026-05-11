@@ -866,8 +866,13 @@ describe("HashiClient", () => {
         const SPENT_POOL_ID = "0x" + "a2".repeat(32);
         const TABLE_ID = "0x" + "a3".repeat(32);
 
-        /** Mirror @mysten/sui's JSON-RPC `ObjectError` shape for "not found." */
-        const notFoundError = () => Object.assign(new Error("not found"), { code: "notExists" });
+        /** JSON-RPC `ObjectError` not-found shape: `.code === "notExists"`. */
+        const jsonRpcNotFoundError = () =>
+            Object.assign(new Error("not found"), { code: "notExists" });
+        /** gRPC not-found shape: plain `Error` with `Object <id> not found` message. */
+        const grpcNotFoundError = (id = "0x" + "00".repeat(32)) =>
+            new Error(`Object ${id} not found`);
+        const notFoundError = jsonRpcNotFoundError;
 
         /** BCS-encoded BitcoinState with known Bag/Table IDs. */
         function mockBitcoinStateContent() {
@@ -1021,15 +1026,31 @@ describe("HashiClient", () => {
             ).rejects.toThrow("internal server error");
         });
 
-        it("rethrows a plain Error without a code (e.g. gRPC transport error)", async () => {
+        it("treats gRPC 'Object <id> not found' plain Errors as misses", async () => {
             mockFetchBitcoinState();
             vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
-                objects: [new Error("opaque transport failure"), notFoundError()],
+                objects: [grpcNotFoundError(), grpcNotFoundError()],
+            } as never);
+
+            const result = await client.hashi.view.findUsedUtxos([
+                { txid: "0x" + "ab".repeat(32), vout: 0 },
+            ]);
+            expect(result[0]).toMatchObject({
+                inActivePool: false,
+                inSpentPool: false,
+                isUsed: false,
+            });
+        });
+
+        it("rethrows a plain Error whose message isn't the gRPC not-found pattern", async () => {
+            mockFetchBitcoinState();
+            vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
+                objects: [new Error("internal server error"), notFoundError()],
             } as never);
 
             await expect(
                 client.hashi.view.findUsedUtxos([{ txid: "0x" + "ab".repeat(32), vout: 0 }]),
-            ).rejects.toThrow("opaque transport failure");
+            ).rejects.toThrow("internal server error");
         });
 
         it("throws HashiFetchError when getObjects returns a wrong-length response", async () => {
