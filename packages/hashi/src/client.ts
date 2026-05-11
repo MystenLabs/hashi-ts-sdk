@@ -735,109 +735,19 @@ export class HashiClient {
          */
         transactionHistory: async (suiAddress: string): Promise<TransactionHistoryItem[]> => {
             const btcState = await this.#fetchBitcoinState();
-            const tableId = btcState.user_requests.id;
 
-            // Look up the user's Bag in the Table.
-            let userBagId: string;
-            try {
-                const { dynamicField } = await this.#client.core.getDynamicField({
-                    parentId: tableId,
-                    name: {
-                        type: "address",
-                        bcs: bcs.Address.serialize(suiAddress).toBytes(),
-                    },
-                });
-                const bag = Bag.parse(new Uint8Array(dynamicField.value.bcs));
-                userBagId = bag.id;
-            } catch {
-                return []; // No requests for this user.
-            }
+            const userBagId = await this.#fetchUserRequestsBagId(
+                btcState.user_requests.id,
+                suiAddress,
+            );
+            if (userBagId === null) return [];
 
-            // Enumerate all request IDs from the Bag.
-            const requestIds: string[] = [];
-            let cursor: string | null = null;
-            do {
-                const page = await this.#client.core.listDynamicFields({
-                    parentId: userBagId,
-                    cursor: cursor ?? undefined,
-                });
-                for (const df of page.dynamicFields) {
-                    requestIds.push(bcs.Address.parse(new Uint8Array(df.name.bcs)));
-                }
-                cursor = page.hasNextPage ? page.cursor : null;
-            } while (cursor);
-
+            const requestIds = await this.#listAllDynamicFieldAddressKeys(userBagId);
             if (requestIds.length === 0) return [];
 
-            // Batch-fetch all request objects with BCS content.
             const objects = await this.#batchGetObjects(requestIds, { content: true });
-
-            const items: TransactionHistoryItem[] = [];
-            // Track indices of withdrawal items that have a linked transaction,
-            // so we can batch-fetch their WithdrawalTransaction objects.
-            const withdrawalTxnLookups: { itemIndex: number; txnId: string }[] = [];
-
-            const depositRequestType = `${this.#packageId}::deposit_queue::DepositRequest`;
-            const withdrawalRequestType = `${this.#packageId}::withdrawal_queue::WithdrawalRequest`;
-
-            for (const obj of objects) {
-                if (obj instanceof Error) continue;
-                if (obj.type === depositRequestType) {
-                    const parsed = DepositRequest.parse(obj.content!);
-                    items.push({
-                        kind: "deposit",
-                        requestId: parsed.id,
-                        sender: parsed.sender,
-                        timestampMs: BigInt(parsed.timestamp_ms),
-                        suiTxDigest: `0x${toHex(new Uint8Array(parsed.sui_tx_digest))}`,
-                        amountSats: BigInt(parsed.utxo.amount),
-                        btcTxid: reverseTxidBytes(parsed.utxo.id.txid),
-                        btcVout: parsed.utxo.id.vout,
-                        approved: parsed.approval_cert !== null,
-                        approvalTimestampMs:
-                            parsed.approval_timestamp_ms !== null
-                                ? BigInt(parsed.approval_timestamp_ms)
-                                : null,
-                    } satisfies DepositHistoryItem);
-                } else if (obj.type === withdrawalRequestType) {
-                    const parsed = WithdrawalRequest.parse(obj.content!);
-                    const txnId = parsed.withdrawal_txn_id ?? null;
-                    items.push({
-                        kind: "withdrawal",
-                        requestId: parsed.id,
-                        sender: parsed.sender,
-                        btcAmountSats: BigInt(parsed.btc_amount),
-                        bitcoinAddress: new Uint8Array(parsed.bitcoin_address),
-                        timestampMs: BigInt(parsed.timestamp_ms),
-                        suiTxDigest: `0x${toHex(new Uint8Array(parsed.sui_tx_digest))}`,
-                        status: parsed.status.$kind as WithdrawalStatus,
-                        withdrawalTxnId: txnId,
-                        btcTxid: null,
-                    } satisfies WithdrawalHistoryItem);
-                    if (txnId) {
-                        withdrawalTxnLookups.push({
-                            itemIndex: items.length - 1,
-                            txnId,
-                        });
-                    }
-                }
-            }
-
-            // Batch-fetch WithdrawalTransaction objects to populate btcTxid.
-            if (withdrawalTxnLookups.length > 0) {
-                const txnIds = withdrawalTxnLookups.map((l) => l.txnId);
-                const txnObjects = await this.#batchGetObjects(txnIds, { content: true });
-
-                for (let i = 0; i < withdrawalTxnLookups.length; i++) {
-                    const txnObj = txnObjects[i];
-                    if (txnObj instanceof Error) continue;
-                    const parsed = WithdrawalTransaction.parse(txnObj.content!);
-                    const item = items[withdrawalTxnLookups[i].itemIndex] as WithdrawalHistoryItem;
-                    // Overwrite the readonly btcTxid — we control construction.
-                    (item as { btcTxid: string | null }).btcTxid = reverseTxidBytes(parsed.txid);
-                }
-            }
-
+            const { items, withdrawalTxnLookups } = this.#classifyRequestObjects(objects);
+            await this.#populateWithdrawalBtcTxids(items, withdrawalTxnLookups);
             return items;
         },
     };
@@ -886,4 +796,138 @@ export class HashiClient {
         }
         return results;
     }
+
+    /**
+     * Resolve the Bag id holding a user's request IDs from `user_requests`,
+     * or `null` if the user has never had a request (no Table entry yet —
+     * `getDynamicField` rejects rather than returning a sentinel).
+     */
+    async #fetchUserRequestsBagId(tableId: string, suiAddress: string): Promise<string | null> {
+        try {
+            const { dynamicField } = await this.#client.core.getDynamicField({
+                parentId: tableId,
+                name: {
+                    type: "address",
+                    bcs: bcs.Address.serialize(suiAddress).toBytes(),
+                },
+            });
+            return Bag.parse(new Uint8Array(dynamicField.value.bcs)).id;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Enumerate every `address`-keyed dynamic field on `parentId`, paginating
+     * through `listDynamicFields` until exhausted. Decodes each `name.bcs` as
+     * a Sui address.
+     */
+    async #listAllDynamicFieldAddressKeys(parentId: string): Promise<string[]> {
+        const keys: string[] = [];
+        let cursor: string | null = null;
+        do {
+            const page = await this.#client.core.listDynamicFields({
+                parentId,
+                cursor: cursor ?? undefined,
+            });
+            for (const df of page.dynamicFields) {
+                keys.push(bcs.Address.parse(new Uint8Array(df.name.bcs)));
+            }
+            cursor = page.hasNextPage ? page.cursor : null;
+        } while (cursor);
+        return keys;
+    }
+
+    /**
+     * Classify a batch of request objects into deposit / withdrawal history
+     * items. Errors in the batch are skipped (the request object may have
+     * been deleted between the bag enumeration and the fetch). Returns the
+     * items plus the indices that need a follow-up `WithdrawalTransaction`
+     * fetch to populate `btcTxid`.
+     */
+    #classifyRequestObjects(
+        objects: readonly (SuiClientTypes.Object<{ content: true }> | Error)[],
+    ): {
+        items: TransactionHistoryItem[];
+        withdrawalTxnLookups: { itemIndex: number; txnId: string }[];
+    } {
+        const items: TransactionHistoryItem[] = [];
+        const withdrawalTxnLookups: { itemIndex: number; txnId: string }[] = [];
+        const depositRequestType = `${this.#packageId}::deposit_queue::DepositRequest`;
+        const withdrawalRequestType = `${this.#packageId}::withdrawal_queue::WithdrawalRequest`;
+
+        for (const obj of objects) {
+            if (obj instanceof Error) continue;
+            if (obj.type === depositRequestType) {
+                items.push(parseDepositHistoryItem(obj.content));
+            } else if (obj.type === withdrawalRequestType) {
+                const item = parseWithdrawalHistoryItem(obj.content);
+                items.push(item);
+                if (item.withdrawalTxnId) {
+                    withdrawalTxnLookups.push({
+                        itemIndex: items.length - 1,
+                        txnId: item.withdrawalTxnId,
+                    });
+                }
+            }
+        }
+
+        return { items, withdrawalTxnLookups };
+    }
+
+    /**
+     * Batch-fetch `WithdrawalTransaction` objects for the withdrawal items
+     * that have a linked txn and overwrite their `btcTxid` in place. Errors
+     * in the batch leave `btcTxid` at the initial `null`.
+     */
+    async #populateWithdrawalBtcTxids(
+        items: TransactionHistoryItem[],
+        lookups: readonly { itemIndex: number; txnId: string }[],
+    ): Promise<void> {
+        if (lookups.length === 0) return;
+        const txnIds = lookups.map((l) => l.txnId);
+        const txnObjects = await this.#batchGetObjects(txnIds, { content: true });
+        for (let i = 0; i < lookups.length; i++) {
+            const txnObj = txnObjects[i];
+            if (txnObj instanceof Error) continue;
+            const parsed = WithdrawalTransaction.parse(txnObj.content);
+            const item = items[lookups[i].itemIndex] as WithdrawalHistoryItem;
+            (item as { btcTxid: string | null }).btcTxid = reverseTxidBytes(parsed.txid);
+        }
+    }
+}
+
+function parseDepositHistoryItem(content: Uint8Array): DepositHistoryItem {
+    const parsed = DepositRequest.parse(content);
+    return {
+        kind: "deposit",
+        requestId: parsed.id,
+        sender: parsed.sender,
+        timestampMs: BigInt(parsed.timestamp_ms),
+        suiTxDigest: `0x${toHex(new Uint8Array(parsed.sui_tx_digest))}`,
+        amountSats: BigInt(parsed.utxo.amount),
+        btcTxid: reverseTxidBytes(parsed.utxo.id.txid),
+        btcVout: parsed.utxo.id.vout,
+        approved: parsed.approval_cert !== null,
+        approvalTimestampMs:
+            parsed.approval_timestamp_ms === null
+                ? null
+                : BigInt(parsed.approval_timestamp_ms),
+    };
+}
+
+function parseWithdrawalHistoryItem(content: Uint8Array): WithdrawalHistoryItem {
+    const parsed = WithdrawalRequest.parse(content);
+    return {
+        kind: "withdrawal",
+        requestId: parsed.id,
+        sender: parsed.sender,
+        btcAmountSats: BigInt(parsed.btc_amount),
+        bitcoinAddress: new Uint8Array(parsed.bitcoin_address),
+        timestampMs: BigInt(parsed.timestamp_ms),
+        suiTxDigest: `0x${toHex(new Uint8Array(parsed.sui_tx_digest))}`,
+        status: parsed.status.$kind as WithdrawalStatus,
+        withdrawalTxnId: parsed.withdrawal_txn_id ?? null,
+        btcTxid: null,
+    };
 }
