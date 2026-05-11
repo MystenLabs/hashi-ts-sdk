@@ -1375,6 +1375,380 @@ describe("HashiClient", () => {
         });
     });
 
+    describe("view.balance", () => {
+        it("returns total balance and coin object count", async () => {
+            vi.spyOn(client.core, "getBalance").mockResolvedValueOnce({
+                balance: {
+                    balance: "150000",
+                    coinType: `${PACKAGE_ID}::btc::BTC`,
+                    coinBalance: "150000",
+                    addressBalance: "150000",
+                },
+            } as never);
+            vi.spyOn(client.core, "listCoins").mockResolvedValueOnce({
+                objects: [{}, {}],
+                cursor: null,
+                hasNextPage: false,
+            } as never);
+
+            const result = await client.hashi.view.balance(TEST_SUI_ADDRESS);
+            expect(result.totalBalance).toBe(150_000n);
+            expect(result.coinObjectCount).toBe(2);
+        });
+
+        it("returns zero balance when no coins exist", async () => {
+            vi.spyOn(client.core, "getBalance").mockResolvedValueOnce({
+                balance: {
+                    balance: "0",
+                    coinType: `${PACKAGE_ID}::btc::BTC`,
+                    coinBalance: "0",
+                    addressBalance: "0",
+                },
+            } as never);
+            vi.spyOn(client.core, "listCoins").mockResolvedValueOnce({
+                objects: [],
+                cursor: null,
+                hasNextPage: false,
+            } as never);
+
+            const result = await client.hashi.view.balance(TEST_SUI_ADDRESS);
+            expect(result.totalBalance).toBe(0n);
+            expect(result.coinObjectCount).toBe(0);
+        });
+
+        it("paginates through multiple pages of coins", async () => {
+            vi.spyOn(client.core, "getBalance").mockResolvedValueOnce({
+                balance: { balance: "300000", coinType: `${PACKAGE_ID}::btc::BTC`, coinBalance: "300000", addressBalance: "300000" },
+            } as never);
+            const listCoinsSpy = vi.spyOn(client.core, "listCoins");
+            listCoinsSpy.mockResolvedValueOnce({
+                objects: [{}, {}],
+                cursor: "page1",
+                hasNextPage: true,
+            } as never);
+            listCoinsSpy.mockResolvedValueOnce({
+                objects: [{}],
+                cursor: null,
+                hasNextPage: false,
+            } as never);
+
+            const result = await client.hashi.view.balance(TEST_SUI_ADDRESS);
+            expect(result.coinObjectCount).toBe(3);
+            expect(listCoinsSpy).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    describe("view.depositStatus", () => {
+        it("returns null when no deposit event is found in the transaction", async () => {
+            vi.spyOn(client.core, "getTransaction").mockResolvedValueOnce({
+                Transaction: { events: [] },
+            } as never);
+
+            const result = await client.hashi.view.depositStatus("test-digest");
+            expect(result).toBeNull();
+        });
+
+        it("returns pending status when request exists in the requests bag", async () => {
+            vi.spyOn(client.core, "getTransaction").mockResolvedValueOnce({
+                Transaction: {
+                    events: [
+                        {
+                            eventType: `${PACKAGE_ID}::deposit::DepositRequestedEvent`,
+                            json: {
+                                request_id: REQUEST_ID,
+                                utxo_id: { txid: "0x" + "ab".repeat(32), vout: 0 },
+                                amount: "50000",
+                                derivation_path: TEST_SUI_ADDRESS,
+                                timestamp_ms: "1000",
+                            },
+                        },
+                    ],
+                },
+            } as never);
+
+            vi.spyOn(DepositRequest, "get").mockResolvedValueOnce({
+                json: {},
+            } as never);
+
+            const getDfSpy = vi.spyOn(client.core, "getDynamicField");
+            // First call: fetchBitcoinState
+            getDfSpy.mockResolvedValueOnce({
+                dynamicField: {
+                    value: {
+                        bcs: BitcoinState.serialize({
+                            deposit_queue: {
+                                requests: { id: "0x" + "d1".repeat(32), size: "0" },
+                                processed: { id: "0x" + "d2".repeat(32), size: "0" },
+                            },
+                            withdrawal_queue: {
+                                requests: { id: "0x" + "c1".repeat(32), size: "0" },
+                                processed: { id: "0x" + "c2".repeat(32), size: "0" },
+                                withdrawal_txns: { id: "0x" + "c3".repeat(32), size: "0" },
+                                confirmed_txns: { id: "0x" + "c4".repeat(32), size: "0" },
+                            },
+                            utxo_pool: {
+                                utxo_records: { id: "0x" + "a1".repeat(32), size: "0" },
+                                spent_utxos: { id: "0x" + "a2".repeat(32), size: "0" },
+                            },
+                            user_requests: { id: "0x" + "a3".repeat(32), size: "0" },
+                        }).toBytes(),
+                    },
+                },
+            } as never);
+            // Second call: check requests bag — found means pending
+            getDfSpy.mockResolvedValueOnce({
+                dynamicField: { objectId: REQUEST_ID },
+            } as never);
+
+            const result = await client.hashi.view.depositStatus("test-digest");
+            expect(result).not.toBeNull();
+            expect(result!.status).toBe("pending");
+            expect(result!.amountSats).toBe(50_000n);
+            expect(result!.btcVout).toBe(0);
+        });
+
+        it("returns expired status when request object is not found", async () => {
+            vi.spyOn(client.core, "getTransaction").mockResolvedValueOnce({
+                Transaction: {
+                    events: [
+                        {
+                            eventType: `${PACKAGE_ID}::deposit::DepositRequestedEvent`,
+                            json: {
+                                request_id: REQUEST_ID,
+                                utxo_id: { txid: "0x" + "ab".repeat(32), vout: 0 },
+                                amount: "50000",
+                                derivation_path: TEST_SUI_ADDRESS,
+                                timestamp_ms: "1000",
+                            },
+                        },
+                    ],
+                },
+            } as never);
+
+            vi.spyOn(DepositRequest, "get").mockRejectedValueOnce(new Error("not found"));
+
+            const result = await client.hashi.view.depositStatus("test-digest");
+            expect(result).not.toBeNull();
+            expect(result!.status).toBe("expired");
+        });
+    });
+
+    describe("view.withdrawalStatus", () => {
+        it("returns null when no withdrawal event is found", async () => {
+            vi.spyOn(client.core, "getTransaction").mockResolvedValueOnce({
+                Transaction: { events: [] },
+            } as never);
+
+            const result = await client.hashi.view.withdrawalStatus("test-digest");
+            expect(result).toBeNull();
+        });
+
+        it("returns cancelled status when request object is not found", async () => {
+            vi.spyOn(client.core, "getTransaction").mockResolvedValueOnce({
+                Transaction: {
+                    events: [
+                        {
+                            eventType: `${PACKAGE_ID}::withdrawal_queue::WithdrawalRequestedEvent`,
+                            json: {
+                                request_id: REQUEST_ID,
+                                btc_amount: "30000",
+                                bitcoin_address: Array.from(new Uint8Array(32).fill(0xcc)),
+                                timestamp_ms: "2000",
+                                requester_address: TEST_SUI_ADDRESS,
+                            },
+                        },
+                    ],
+                },
+            } as never);
+
+            vi.spyOn(WithdrawalRequest, "get").mockRejectedValueOnce(new Error("not found"));
+
+            const result = await client.hashi.view.withdrawalStatus("test-digest");
+            expect(result).not.toBeNull();
+            expect(result!.status).toBe("cancelled");
+            expect(result!.btcTxid).toBeNull();
+        });
+
+        it("returns current status with btcTxid when withdrawal transaction exists", async () => {
+            const BTC_TXID_INTERNAL = "0x" + "99".repeat(32);
+            const BTC_TXID_DISPLAY = reverseTxidBytes(BTC_TXID_INTERNAL);
+
+            vi.spyOn(client.core, "getTransaction").mockResolvedValueOnce({
+                Transaction: {
+                    events: [
+                        {
+                            eventType: `${PACKAGE_ID}::withdrawal_queue::WithdrawalRequestedEvent`,
+                            json: {
+                                request_id: REQUEST_ID,
+                                btc_amount: "30000",
+                                bitcoin_address: Array.from(new Uint8Array(32).fill(0xcc)),
+                                timestamp_ms: "2000",
+                                requester_address: TEST_SUI_ADDRESS,
+                            },
+                        },
+                    ],
+                },
+            } as never);
+
+            vi.spyOn(WithdrawalRequest, "get").mockResolvedValueOnce({
+                json: {
+                    status: { $kind: "Signed" },
+                    withdrawal_txn_id: "0x" + "f0".repeat(32),
+                },
+            } as never);
+
+            vi.spyOn(WithdrawalTransaction, "get").mockResolvedValueOnce({
+                json: { txid: BTC_TXID_INTERNAL },
+            } as never);
+
+            const result = await client.hashi.view.withdrawalStatus("test-digest");
+            expect(result).not.toBeNull();
+            expect(result!.status).toBe("Signed");
+            expect(result!.btcTxid).toBe(BTC_TXID_DISPLAY);
+        });
+    });
+
+    describe("view.depositGasEstimate", () => {
+        it("returns gas estimate from simulation", async () => {
+            vi.spyOn(client.core, "simulateTransaction").mockResolvedValueOnce({
+                Transaction: {
+                    effects: {
+                        gasUsed: {
+                            computationCost: "1000",
+                            storageCost: "500",
+                            storageRebate: "200",
+                        },
+                    },
+                },
+            } as never);
+
+            const result = await client.hashi.view.depositGasEstimate(TEST_SUI_ADDRESS);
+            // (1000 + 500 - 200) * 120 / 100 = 1560
+            expect(result.gasEstimateMist).toBe(1560n);
+        });
+
+        it("returns 0n when simulation fails", async () => {
+            vi.spyOn(client.core, "simulateTransaction").mockRejectedValueOnce(
+                new Error("simulation failed"),
+            );
+
+            const result = await client.hashi.view.depositGasEstimate(TEST_SUI_ADDRESS);
+            expect(result.gasEstimateMist).toBe(0n);
+        });
+    });
+
+    describe("view.withdrawalFees", () => {
+        it("returns fees from governance config without gas when no sender", async () => {
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
+
+            const result = await client.hashi.view.withdrawalFees();
+            expect(result.withdrawalMinimumSats).toBe(30_000n);
+            expect(result.worstCaseNetworkFeeSats).toBe(30_000n - 546n);
+            expect(result.gasEstimateMist).toBe(0n);
+        });
+
+        it("includes gas estimate when sender is provided", async () => {
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
+            vi.spyOn(client.core, "simulateTransaction").mockResolvedValueOnce({
+                Transaction: {
+                    effects: {
+                        gasUsed: {
+                            computationCost: "2000",
+                            storageCost: "1000",
+                            storageRebate: "500",
+                        },
+                    },
+                },
+            } as never);
+
+            const result = await client.hashi.view.withdrawalFees(TEST_SUI_ADDRESS);
+            expect(result.withdrawalMinimumSats).toBe(30_000n);
+            // (2000 + 1000 - 500) * 120 / 100 = 3000
+            expect(result.gasEstimateMist).toBe(3000n);
+        });
+    });
+
+    describe("waitForDeposit", () => {
+        it("returns immediately when deposit is already confirmed", async () => {
+            const statusSpy = vi.spyOn(client.hashi.view, "depositStatus").mockResolvedValueOnce({
+                requestId: REQUEST_ID,
+                amountSats: 50_000n,
+                recipient: TEST_SUI_ADDRESS,
+                btcTxid: "0x" + "ab".repeat(32),
+                btcVout: 0,
+                timestampMs: 1_000n,
+                status: "confirmed",
+                suiTxDigest: "test-digest",
+            });
+
+            const result = await client.hashi.waitForDeposit("test-digest");
+            expect(result.status).toBe("confirmed");
+            expect(statusSpy).toHaveBeenCalledTimes(1);
+        });
+
+        it("throws when deposit is not found", async () => {
+            vi.spyOn(client.hashi.view, "depositStatus").mockResolvedValueOnce(null);
+
+            await expect(client.hashi.waitForDeposit("test-digest")).rejects.toThrow(
+                "Deposit not found",
+            );
+        });
+    });
+
+    describe("waitForWithdrawal", () => {
+        it("returns immediately when withdrawal is already confirmed", async () => {
+            vi.spyOn(client.hashi.view, "withdrawalStatus").mockResolvedValueOnce({
+                requestId: REQUEST_ID,
+                btcAmountSats: 30_000n,
+                bitcoinAddress: new Uint8Array(32),
+                sender: TEST_SUI_ADDRESS,
+                timestampMs: 2_000n,
+                status: "Confirmed",
+                suiTxDigest: "test-digest",
+                btcTxid: "0x" + "99".repeat(32),
+            });
+
+            const result = await client.hashi.waitForWithdrawal("test-digest");
+            expect(result.status).toBe("Confirmed");
+        });
+
+        it("returns when withdrawal is cancelled", async () => {
+            vi.spyOn(client.hashi.view, "withdrawalStatus").mockResolvedValueOnce({
+                requestId: REQUEST_ID,
+                btcAmountSats: 30_000n,
+                bitcoinAddress: new Uint8Array(32),
+                sender: TEST_SUI_ADDRESS,
+                timestampMs: 2_000n,
+                status: "cancelled",
+                suiTxDigest: "test-digest",
+                btcTxid: null,
+            });
+
+            const result = await client.hashi.waitForWithdrawal("test-digest");
+            expect(result.status).toBe("cancelled");
+        });
+    });
+
+    describe("bitcoin (BTC RPC)", () => {
+        it("throws when btcRpcUrl is not configured", async () => {
+            await expect(
+                client.hashi.bitcoin.lookupVout("txid", "addr"),
+            ).rejects.toThrow("btcRpcUrl is required");
+        });
+
+        it("throws for lookupAllVouts without btcRpcUrl", async () => {
+            await expect(
+                client.hashi.bitcoin.lookupAllVouts("txid", "addr"),
+            ).rejects.toThrow("btcRpcUrl is required");
+        });
+
+        it("throws for confirmations without btcRpcUrl", async () => {
+            await expect(
+                client.hashi.bitcoin.confirmations("txid"),
+            ).rejects.toThrow("btcRpcUrl is required");
+        });
+    });
+
     describe("tx", () => {
         describe("deposit", () => {
             it("composes utxo_id + utxo + deposit for a single UTXO", () => {

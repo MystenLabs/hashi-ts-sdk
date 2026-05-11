@@ -30,19 +30,36 @@ import {
 import type {
     BitcoinNetwork,
     CancelWithdrawalParams,
+    DepositFees,
     DepositHistoryItem,
+    DepositInfo,
     DepositParams,
+    DepositStatus,
     GovernanceConfig,
     HashiClientOptions,
+    HbtcBalance,
     SuiNetwork,
     TransactionHistoryItem,
     UtxoId,
+    UtxoLookupResult,
     UtxoUsageResult,
+    WaitOptions,
+    WithdrawalFees,
     WithdrawalHistoryItem,
+    WithdrawalInfo,
     WithdrawalParams,
     WithdrawalStatus,
 } from "./types.js";
+import {
+    lookupVout,
+    lookupAllVouts,
+    getTxConfirmations,
+} from "./btc-rpc.js";
 import { assertHex32, entry, reverseTxidBytes, type ConfigEntry } from "./util.js";
+
+/** ObjectBag dynamic field name type (Wrapper<address> for dynamic_object_field lookups). */
+const OBJECT_BAG_ADDRESS_TYPE =
+    "0x0000000000000000000000000000000000000000000000000000000000000002::dynamic_object_field::Wrapper<address>";
 
 /** Max value of an unsigned 32-bit integer; vout is a u32 on the Bitcoin side. */
 const U32_MAX = 0xffffffff;
@@ -109,6 +126,7 @@ export class HashiClient {
     #hashiObjectId: string;
     #packageId: string;
     #bitcoinNetwork: BitcoinNetwork;
+    #btcRpcUrl: string | undefined;
 
     constructor({
         client,
@@ -116,12 +134,14 @@ export class HashiClient {
         hashiObjectId,
         packageId,
         bitcoinNetwork,
+        btcRpcUrl,
     }: {
         client: ClientWithCoreApi;
         network: SuiNetwork;
         hashiObjectId?: string;
         packageId?: string;
         bitcoinNetwork?: BitcoinNetwork;
+        btcRpcUrl?: string;
     }) {
         const config = NETWORK_CONFIG[network];
         const resolvedObjectId = hashiObjectId ?? config?.hashiObjectId;
@@ -135,6 +155,7 @@ export class HashiClient {
         this.#hashiObjectId = resolvedObjectId;
         this.#packageId = resolvedPackageId;
         this.#bitcoinNetwork = bitcoinNetwork ?? config?.bitcoinNetwork ?? "testnet";
+        this.#btcRpcUrl = btcRpcUrl;
     }
 
     /**
@@ -734,6 +755,276 @@ export class HashiClient {
         },
 
         /**
+         * Get the hBTC balance for a Sui address.
+         *
+         * @returns Total balance in satoshis and the number of coin objects held.
+         */
+        balance: async (owner: string): Promise<HbtcBalance> => {
+            const btcType = `${this.#packageId}::btc::BTC`;
+            const { balance } = await this.#client.core.getBalance({
+                owner,
+                coinType: btcType,
+            });
+
+            let coinObjectCount = 0;
+            let cursor: string | null = null;
+            let hasNextPage = true;
+            while (hasNextPage) {
+                const page = await this.#client.core.listCoins({
+                    owner,
+                    coinType: btcType,
+                    cursor: cursor ?? undefined,
+                });
+                coinObjectCount += page.objects.length;
+                cursor = page.cursor;
+                hasNextPage = page.hasNextPage;
+            }
+
+            return {
+                totalBalance: BigInt(balance.balance ?? "0"),
+                coinObjectCount,
+            };
+        },
+
+        /**
+         * Get the status and details of a deposit by its Sui transaction digest.
+         *
+         * Fetches the `DepositRequestedEvent` from the transaction, extracts the
+         * request ID, then probes on-chain state to determine whether the deposit
+         * is pending (still in `requests` ObjectBag), confirmed (object exists
+         * but not in requests), or expired (object destroyed).
+         */
+        depositStatus: async (suiTxDigest: string): Promise<DepositInfo | null> => {
+            const txResult = await this.#client.core.getTransaction({
+                digest: suiTxDigest,
+                include: { events: true },
+            });
+
+            const txData = txResult.Transaction ?? txResult.FailedTransaction;
+            if (!txData?.events) return null;
+
+            const depositEvent = txData.events.find(
+                (e: { eventType: string }) =>
+                    e.eventType.includes("::deposit::DepositRequestedEvent"),
+            );
+            if (!depositEvent?.json) return null;
+
+            const parsed = depositEvent.json as {
+                request_id: string;
+                utxo_id: { txid: string; vout: number };
+                amount: string;
+                derivation_path: string | null;
+                timestamp_ms: string;
+            };
+
+            let status: DepositStatus = "unknown";
+            try {
+                await DepositRequest.get({
+                    client: this.#client,
+                    objectId: parsed.request_id,
+                });
+
+                const btcState = await this.#fetchBitcoinState();
+                const requestsBagId = btcState.deposit_queue.requests.id;
+
+                const reqResult = await this.#client.core
+                    .getDynamicField({
+                        parentId: requestsBagId,
+                        name: {
+                            type: OBJECT_BAG_ADDRESS_TYPE,
+                            bcs: bcs.Address.serialize(parsed.request_id).toBytes(),
+                        },
+                    })
+                    .catch(() => null);
+
+                status = reqResult?.dynamicField ? "pending" : "confirmed";
+            } catch {
+                status = "expired";
+            }
+
+            return {
+                requestId: parsed.request_id,
+                amountSats: BigInt(parsed.amount),
+                recipient: parsed.derivation_path,
+                btcTxid: reverseTxidBytes(parsed.utxo_id.txid),
+                btcVout: parsed.utxo_id.vout,
+                timestampMs: BigInt(parsed.timestamp_ms),
+                status,
+                suiTxDigest,
+            };
+        },
+
+        /**
+         * Get the status and details of a withdrawal by its Sui transaction digest.
+         *
+         * Fetches the `WithdrawalRequestedEvent` from the transaction, extracts the
+         * request ID, then reads the `WithdrawalRequest` object to determine the
+         * current lifecycle state. If a `WithdrawalTransaction` is linked, its
+         * Bitcoin txid is populated.
+         */
+        withdrawalStatus: async (suiTxDigest: string): Promise<WithdrawalInfo | null> => {
+            const txResult = await this.#client.core.getTransaction({
+                digest: suiTxDigest,
+                include: { events: true },
+            });
+
+            const txData = txResult.Transaction ?? txResult.FailedTransaction;
+            if (!txData?.events) return null;
+
+            const withdrawEvent = txData.events.find(
+                (e: { eventType: string }) =>
+                    e.eventType.includes("::withdrawal_queue::WithdrawalRequestedEvent"),
+            );
+            if (!withdrawEvent?.json) return null;
+
+            const parsed = withdrawEvent.json as {
+                request_id: string;
+                btc_amount: string;
+                bitcoin_address: number[];
+                timestamp_ms: string;
+                requester_address: string;
+            };
+
+            let status: WithdrawalStatus | "cancelled" = "Requested";
+            let btcTxid: string | null = null;
+
+            try {
+                const reqObj = await WithdrawalRequest.get({
+                    client: this.#client,
+                    objectId: parsed.request_id,
+                });
+                status = reqObj.json.status.$kind as WithdrawalStatus;
+
+                const withdrawalTxnId = reqObj.json.withdrawal_txn_id;
+                if (
+                    withdrawalTxnId &&
+                    (status === "Processing" || status === "Signed" || status === "Confirmed")
+                ) {
+                    try {
+                        const txnObj = await WithdrawalTransaction.get({
+                            client: this.#client,
+                            objectId: withdrawalTxnId,
+                        });
+                        btcTxid = reverseTxidBytes(txnObj.json.txid);
+                    } catch {
+                        // best effort
+                    }
+                }
+            } catch {
+                status = "cancelled";
+            }
+
+            return {
+                requestId: parsed.request_id,
+                btcAmountSats: BigInt(parsed.btc_amount),
+                bitcoinAddress: new Uint8Array(parsed.bitcoin_address),
+                sender: parsed.requester_address,
+                timestampMs: BigInt(parsed.timestamp_ms),
+                status,
+                suiTxDigest,
+                btcTxid,
+            };
+        },
+
+        /**
+         * Estimate the gas cost for a deposit transaction via dry-run.
+         * Returns `0n` if simulation fails (best-effort).
+         */
+        depositGasEstimate: async (sender: string): Promise<DepositFees> => {
+            let gasEstimateMist = 0n;
+            try {
+                const dummyTxid = "0x" + "00".repeat(32);
+                const tx = new Transaction();
+                const utxoId = tx.add(
+                    utxoModule.utxoId({
+                        package: this.#packageId,
+                        arguments: { txid: dummyTxid, vout: 0 },
+                    }),
+                );
+                const utxo = tx.add(
+                    utxoModule.utxo({
+                        package: this.#packageId,
+                        arguments: { utxoId, amount: 100_000n, derivationPath: sender },
+                    }),
+                );
+                tx.add(this.call.deposit({ utxo }));
+                tx.setSender(sender);
+
+                const result = await this.#client.core.simulateTransaction({
+                    transaction: tx,
+                    include: { effects: true },
+                });
+                const simTx = result.Transaction ?? result.FailedTransaction;
+                if (simTx?.effects?.gasUsed) {
+                    const gas = simTx.effects.gasUsed;
+                    const total =
+                        BigInt(gas.computationCost) +
+                        BigInt(gas.storageCost) -
+                        BigInt(gas.storageRebate);
+                    gasEstimateMist = total > 0n ? (total * 120n) / 100n : 0n;
+                }
+            } catch {
+                // simulation may fail — gas estimate is best-effort
+            }
+            return { gasEstimateMist };
+        },
+
+        /**
+         * Fetch current withdrawal fees, minimums, and gas estimates.
+         *
+         * @param sender - If provided, estimates gas cost via dry-run.
+         */
+        withdrawalFees: async (sender?: string): Promise<WithdrawalFees> => {
+            const snap = await this.view.all();
+
+            const withdrawalMinimumSats = snap.bitcoinWithdrawalMinimum;
+            const worstCaseNetworkFeeSats = snap.worstCaseNetworkFee;
+
+            let gasEstimateMist = 0n;
+            if (sender) {
+                try {
+                    const btcType = `${this.#packageId}::btc::BTC`;
+                    const tx = new Transaction();
+                    const coin = tx.add(
+                        coinWithBalance({ type: btcType, balance: 100_000n, useGasCoin: false }),
+                    );
+                    const [balance] = tx.moveCall({
+                        package: "0x2",
+                        module: "coin",
+                        function: "into_balance",
+                        typeArguments: [btcType],
+                        arguments: [coin],
+                    });
+                    tx.add(
+                        this.call.requestWithdrawal({
+                            btc: balance,
+                            bitcoinAddress: Array(20).fill(0),
+                        }),
+                    );
+                    tx.setSender(sender);
+
+                    const result = await this.#client.core.simulateTransaction({
+                        transaction: tx,
+                        include: { effects: true },
+                    });
+                    const simTx = result.Transaction ?? result.FailedTransaction;
+                    if (simTx?.effects?.gasUsed) {
+                        const gas = simTx.effects.gasUsed;
+                        const total =
+                            BigInt(gas.computationCost) +
+                            BigInt(gas.storageCost) -
+                            BigInt(gas.storageRebate);
+                        gasEstimateMist = total > 0n ? (total * 120n) / 100n : 0n;
+                    }
+                } catch {
+                    // simulation may fail — gas estimate is best-effort
+                }
+            }
+
+            return { worstCaseNetworkFeeSats, withdrawalMinimumSats, gasEstimateMist };
+        },
+
+        /**
          * Fetch the unified transaction history (deposits + withdrawals) for
          * a Sui address. Reads from `BitcoinState.user_requests` — a Table
          * that maps each user address to a Bag of request IDs — then batch-
@@ -762,6 +1053,100 @@ export class HashiClient {
             return items;
         },
     };
+
+    // ------------------------------------------------------------------
+    // Polling helpers
+    // ------------------------------------------------------------------
+
+    /**
+     * Poll deposit status until it reaches a terminal state (confirmed or expired).
+     */
+    async waitForDeposit(
+        suiTxDigest: string,
+        options?: WaitOptions,
+    ): Promise<DepositInfo> {
+        const intervalMs = options?.intervalMs ?? 15_000;
+        const signal = options?.signal;
+        while (!signal?.aborted) {
+            const info = await this.view.depositStatus(suiTxDigest);
+            if (!info) throw new Error(`Deposit not found for digest: ${suiTxDigest}`);
+            if (info.status === "confirmed" || info.status === "expired") return info;
+            await sleep(intervalMs, signal);
+        }
+        throw new Error("Polling aborted");
+    }
+
+    /**
+     * Poll withdrawal status until it reaches a terminal state (confirmed or cancelled).
+     */
+    async waitForWithdrawal(
+        suiTxDigest: string,
+        options?: WaitOptions,
+    ): Promise<WithdrawalInfo> {
+        const intervalMs = options?.intervalMs ?? 15_000;
+        const signal = options?.signal;
+        while (!signal?.aborted) {
+            const info = await this.view.withdrawalStatus(suiTxDigest);
+            if (!info) throw new Error(`Withdrawal not found for digest: ${suiTxDigest}`);
+            if (info.status === "Confirmed" || info.status === "cancelled") return info;
+            await sleep(intervalMs, signal);
+        }
+        throw new Error("Polling aborted");
+    }
+
+    // ------------------------------------------------------------------
+    // Bitcoin RPC (optional — requires btcRpcUrl)
+    // ------------------------------------------------------------------
+
+    bitcoin = {
+        /**
+         * Look up the first UTXO output in a Bitcoin transaction that pays
+         * to the given deposit address.
+         *
+         * Requires `btcRpcUrl` to be configured.
+         */
+        lookupVout: async (
+            txid: string,
+            depositAddress: string,
+        ): Promise<UtxoLookupResult | null> => {
+            this.#requireBtcRpc();
+            return lookupVout(this.#btcRpcUrl!, txid, depositAddress);
+        },
+
+        /**
+         * Look up ALL outputs in a Bitcoin transaction that pay to the given
+         * deposit address.
+         *
+         * Requires `btcRpcUrl` to be configured.
+         */
+        lookupAllVouts: async (
+            txid: string,
+            depositAddress: string,
+        ): Promise<UtxoLookupResult[]> => {
+            this.#requireBtcRpc();
+            return lookupAllVouts(this.#btcRpcUrl!, txid, depositAddress);
+        },
+
+        /**
+         * Returns the current confirmation count for a Bitcoin transaction.
+         * Returns 0 if the transaction is in the mempool but not yet mined.
+         *
+         * Requires `btcRpcUrl` to be configured.
+         */
+        confirmations: async (txid: string): Promise<number> => {
+            this.#requireBtcRpc();
+            return getTxConfirmations(this.#btcRpcUrl!, txid);
+        },
+    };
+
+    #requireBtcRpc(): void {
+        if (!this.#btcRpcUrl) {
+            throw new Error(
+                "btcRpcUrl is required for Bitcoin RPC operations. " +
+                    "Pass it in HashiClientOptions.",
+            );
+        }
+    }
 
     // ------------------------------------------------------------------
     // Private helpers
@@ -941,4 +1326,22 @@ function parseWithdrawalHistoryItem(content: Uint8Array): WithdrawalHistoryItem 
         withdrawalTxnId: parsed.withdrawal_txn_id ?? null,
         btcTxid: null,
     };
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new Error("Aborted"));
+            return;
+        }
+        const timer = setTimeout(resolve, ms);
+        signal?.addEventListener(
+            "abort",
+            () => {
+                clearTimeout(timer);
+                reject(new Error("Aborted"));
+            },
+            { once: true },
+        );
+    });
 }

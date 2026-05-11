@@ -5,6 +5,7 @@ import {
     generateDepositAddress,
     arkworksToSec1Compressed,
     bitcoinAddressToWitnessProgram,
+    witnessProgramToAddress,
 } from "../../src/bitcoin.js";
 import { InvalidBitcoinAddressError } from "../../src/errors.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
@@ -339,5 +340,49 @@ describe("bitcoinAddressToWitnessProgram", () => {
         } catch (err) {
             expect((err as InvalidBitcoinAddressError).address).toBe("foo");
         }
+    });
+});
+
+describe("witnessProgramToAddress", () => {
+    it("round-trips a P2WPKH address (v0, 20 bytes)", () => {
+        const program = new Uint8Array(20).fill(0xaa);
+        const addr = witnessProgramToAddress(program, "regtest");
+        expect(addr).toMatch(/^bcrt1q/);
+
+        const decoded = bitcoinAddressToWitnessProgram(addr, "regtest");
+        expect(decoded.version).toBe(0);
+        expect(new Uint8Array(decoded.program)).toEqual(program);
+    });
+
+    it("round-trips a P2TR address (v1, 32 bytes)", () => {
+        const program = new Uint8Array(32).fill(0xbb);
+        const addr = witnessProgramToAddress(program, "regtest");
+        expect(addr).toMatch(/^bcrt1p/);
+
+        const decoded = bitcoinAddressToWitnessProgram(addr, "regtest");
+        expect(decoded.version).toBe(1);
+        expect(new Uint8Array(decoded.program)).toEqual(program);
+    });
+
+    it("produces correct HRP for each network", () => {
+        const program20 = new Uint8Array(20).fill(0x01);
+        expect(witnessProgramToAddress(program20, "mainnet")).toMatch(/^bc1q/);
+        expect(witnessProgramToAddress(program20, "testnet")).toMatch(/^tb1q/);
+        expect(witnessProgramToAddress(program20, "signet")).toMatch(/^tb1q/);
+        expect(witnessProgramToAddress(program20, "regtest")).toMatch(/^bcrt1q/);
+    });
+
+    it("throws for unsupported program lengths", () => {
+        expect(() => witnessProgramToAddress(new Uint8Array(16), "mainnet")).toThrow(
+            "Unsupported witness program length",
+        );
+    });
+
+    it("is the inverse of bitcoinAddressToWitnessProgram", () => {
+        // Encode a known mainnet P2WPKH
+        const knownAddr = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+        const { program } = bitcoinAddressToWitnessProgram(knownAddr, "mainnet");
+        const reencoded = witnessProgramToAddress(new Uint8Array(program), "mainnet");
+        expect(reencoded).toBe(knownAddr);
     });
 });
