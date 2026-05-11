@@ -145,6 +145,15 @@ describe.skipIf(!isLocalnet())("HashiClient withdrawal lifecycle (localnet)", ()
             timeoutMs: 5_000,
             intervalMs: 100,
         });
+
+        // --- view method assertions (SEDEFI-201) ---
+        // Transaction history should include the withdrawal with status "Requested".
+        const history = await state.client.hashi.view.transactionHistory(state.recipient);
+        const wd = history.find((h) => h.kind === "withdrawal" && h.requestId === state.requestId);
+        expect(wd).toBeDefined();
+        expect(wd!.status).toBe("Requested");
+        expect(wd!.btcAmountSats).toBe(state.withdrawAmountSats);
+        expect(wd!.btcTxid).toBeNull(); // committee hasn't broadcast yet
     }, 60_000);
 
     it(

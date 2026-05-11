@@ -128,4 +128,36 @@ describe("HashiClient.view", () => {
         },
         TIMEOUT,
     );
+
+    it(
+        "findUsedUtxos returns not-used for a made-up UTXO",
+        async () => {
+            const results = await client.hashi.view.findUsedUtxos([
+                { txid: "0x" + "ab".repeat(32), vout: 0 },
+            ]);
+            expect(results).toHaveLength(1);
+            expect(results[0].isUsed).toBe(false);
+            expect(results[0].inActivePool).toBe(false);
+            expect(results[0].inSpentPool).toBe(false);
+        },
+        TIMEOUT,
+    );
+
+    it(
+        "findUsedUtxos returns empty array for empty input",
+        async () => {
+            const results = await client.hashi.view.findUsedUtxos([]);
+            expect(results).toEqual([]);
+        },
+        TIMEOUT,
+    );
+
+    it(
+        "transactionHistory returns empty array for an address with no requests",
+        async () => {
+            const items = await client.hashi.view.transactionHistory("0x" + "00".repeat(32));
+            expect(items).toEqual([]);
+        },
+        TIMEOUT,
+    );
 });

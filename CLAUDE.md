@@ -30,11 +30,11 @@ This repo is a pnpm workspace. The SDK lives in `packages/hashi/` so it can be l
 - `vitest.config.mts` — unit + integration projects; loads `.env` for integration tests.
 - `sui-codegen.config.ts` — codegen config (`path: "../../hashi/packages/hashi"` resolves to the submodule).
 - `src/` — SDK source code (TypeScript)
-  - `client.ts` — `HashiClient` class (via `$extend` pattern); direct methods (`deposit`, `requestWithdrawal`, `cancelWithdrawal` — all sign + execute), plus `generateDepositAddress`, `view.*`, `tx.*`, `call.*`
+  - `client.ts` — `HashiClient` class (via `$extend` pattern); direct methods (`deposit`, `requestWithdrawal`, `cancelWithdrawal` — all sign + execute), plus `generateDepositAddress`, `view.*` (governance config, `findUsedUtxos`, `transactionHistory`), `tx.*`, `call.*`
   - `bitcoin.ts` — Bitcoin address derivation and bech32/bech32m decoding (`bitcoinAddressToWitnessProgram`)
   - `constants.ts` — `NETWORK_CONFIG` (Hashi object/package ids and default BTC network per Sui network)
   - `errors.ts` — typed SDK errors (`HashiConfigError`, `HashiFetchError`, `HashiPausedError`, `AmountBelowMinimumError`, `InvalidParamsError`, `InvalidBitcoinAddressError`)
-  - `types.ts` — public types (`DepositParams`, `WithdrawalParams`, `CancelWithdrawalParams`, `UtxoOutput`, `GovernanceConfig`, network/option shapes)
+  - `types.ts` — public types (`DepositParams`, `WithdrawalParams`, `CancelWithdrawalParams`, `UtxoOutput`, `UtxoId`, `UtxoUsageResult`, `TransactionHistoryItem`, `DepositHistoryItem`, `WithdrawalHistoryItem`, `WithdrawalStatus`, `GovernanceConfig`, network/option shapes)
   - `util.ts` — internal helpers (`assertHex32` hex validation, `entry` for VecMap decoding, `reverseTxidBytes`)
   - `index.ts` — public exports
   - `contracts/` — auto-generated Move bindings (`@mysten/codegen`); do not edit

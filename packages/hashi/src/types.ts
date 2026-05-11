@@ -84,3 +84,69 @@ export interface CancelWithdrawalParams {
     /** 0x-prefixed 32-byte object ID of the pending withdrawal request. */
     readonly requestId: string;
 }
+
+// ---------------------------------------------------------------------------
+// View-layer types — returned by `HashiClient.view.*` read methods.
+// ---------------------------------------------------------------------------
+
+/**
+ * Identifies a single Bitcoin UTXO by its funding transaction and output
+ * index. `txid` is in **display byte order** — the form mempool.space,
+ * blockstream.info, and `bitcoin-cli` show.
+ */
+export interface UtxoId {
+    /** 0x-prefixed 32-byte Bitcoin txid in display byte order. */
+    readonly txid: string;
+    /** Output index within the Bitcoin transaction (u32). */
+    readonly vout: number;
+}
+
+/**
+ * Result of checking a single UTXO against the on-chain `UtxoPool` bags.
+ * `inActivePool` means the UTXO is live (confirmed deposit, not yet
+ * consumed by a withdrawal); `inSpentPool` means it was consumed.
+ */
+export interface UtxoUsageResult {
+    readonly utxoId: UtxoId;
+    readonly inActivePool: boolean;
+    readonly inSpentPool: boolean;
+    /** Convenience: `inActivePool || inSpentPool`. */
+    readonly isUsed: boolean;
+}
+
+/** Discriminated union of deposit and withdrawal history entries. */
+export type TransactionHistoryItem = DepositHistoryItem | WithdrawalHistoryItem;
+
+export interface DepositHistoryItem {
+    readonly kind: "deposit";
+    readonly requestId: string;
+    readonly sender: string;
+    readonly timestampMs: bigint;
+    readonly suiTxDigest: string;
+    readonly amountSats: bigint;
+    /** Bitcoin txid of the funding transaction, in display byte order. */
+    readonly btcTxid: string;
+    /** Output index within the funding transaction. */
+    readonly btcVout: number;
+    /** `true` once the committee has approved the deposit. */
+    readonly approved: boolean;
+    readonly approvalTimestampMs: bigint | null;
+}
+
+export type WithdrawalStatus = "Requested" | "Approved" | "Processing" | "Signed" | "Confirmed";
+
+export interface WithdrawalHistoryItem {
+    readonly kind: "withdrawal";
+    readonly requestId: string;
+    readonly sender: string;
+    readonly btcAmountSats: bigint;
+    /** Raw witness program bytes of the destination Bitcoin address. */
+    readonly bitcoinAddress: Uint8Array;
+    readonly timestampMs: bigint;
+    readonly suiTxDigest: string;
+    readonly status: WithdrawalStatus;
+    /** Object ID of the linked `WithdrawalTransaction`, if one exists. */
+    readonly withdrawalTxnId: string | null;
+    /** Bitcoin txid from the `WithdrawalTransaction`, in display byte order. `null` until the committee commits. */
+    readonly btcTxid: string | null;
+}

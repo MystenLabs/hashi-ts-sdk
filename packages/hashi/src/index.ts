@@ -18,11 +18,17 @@ export {
 export type {
     BitcoinNetwork,
     CancelWithdrawalParams,
+    DepositHistoryItem,
     DepositParams,
     GovernanceConfig,
     HashiClientOptions,
     NetworkConfig,
     SuiNetwork,
+    TransactionHistoryItem,
+    UtxoId,
     UtxoOutput,
+    UtxoUsageResult,
+    WithdrawalHistoryItem,
     WithdrawalParams,
+    WithdrawalStatus,
 } from "./types.js";

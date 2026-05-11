@@ -89,6 +89,25 @@ describe("HashiClient.deposit (real network)", () => {
                     intervalMs: LOCALNET_HBTC_INTERVAL_MS,
                 });
                 expect(final).toBeGreaterThanOrEqual(target);
+
+                // --- view method assertions (SEDEFI-201) ---
+
+                // The deposited UTXO should now appear in the active pool.
+                const usage = await client.hashi.view.findUsedUtxos([
+                    { txid: funded.txid, vout: funded.vout },
+                ]);
+                expect(usage).toHaveLength(1);
+                expect(usage[0].isUsed).toBe(true);
+                expect(usage[0].inActivePool).toBe(true);
+
+                // Transaction history should contain the deposit with correct
+                // btcTxid and btcVout extracted from the on-chain DepositRequest.
+                const history = await client.hashi.view.transactionHistory(recipient);
+                const dep = history.find((h) => h.kind === "deposit" && h.btcTxid === funded.txid);
+                expect(dep).toBeDefined();
+                expect(dep!.btcVout).toBe(funded.vout);
+                expect(dep!.amountSats).toBe(funded.amountSats);
+                expect(dep!.sender).toBe(recipient);
             },
             LOCALNET_HBTC_TIMEOUT_MS + 60_000,
         );
