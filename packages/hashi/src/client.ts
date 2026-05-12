@@ -1,7 +1,8 @@
 import type { ClientWithCoreApi, SuiClientTypes } from "@mysten/sui/client";
 import type { Signer } from "@mysten/sui/cryptography";
 import { bcs, TypeTagSerializer } from "@mysten/sui/bcs";
-import { fromHex, toHex, deriveDynamicFieldID } from "@mysten/sui/utils";
+import { fromHex, deriveDynamicFieldID } from "@mysten/sui/utils";
+import { base58 } from "@scure/base";
 import { Transaction, coinWithBalance } from "@mysten/sui/transactions";
 import { Hashi } from "./contracts/hashi/hashi.js";
 import { BitcoinState, BitcoinStateKey } from "./contracts/hashi/bitcoin_state.js";
@@ -1286,7 +1287,7 @@ function parseDepositHistoryItem(content: Uint8Array): DepositHistoryItem {
         requestId: parsed.id,
         sender: parsed.sender,
         timestampMs: BigInt(parsed.timestamp_ms),
-        suiTxDigest: `0x${toHex(new Uint8Array(parsed.sui_tx_digest))}`,
+        suiTxDigest: base58.encode(new Uint8Array(parsed.sui_tx_digest)),
         amountSats: BigInt(parsed.utxo.amount),
         btcTxid: reverseTxidBytes(parsed.utxo.id.txid),
         btcVout: parsed.utxo.id.vout,
@@ -1307,7 +1308,7 @@ function parseWithdrawalHistoryItem(content: Uint8Array): WithdrawalHistoryItem 
         btcAmountSats: BigInt(parsed.btc_amount),
         bitcoinAddress: new Uint8Array(parsed.bitcoin_address),
         timestampMs: BigInt(parsed.timestamp_ms),
-        suiTxDigest: `0x${toHex(new Uint8Array(parsed.sui_tx_digest))}`,
+        suiTxDigest: base58.encode(new Uint8Array(parsed.sui_tx_digest)),
         status: parsed.status.$kind as WithdrawalStatus,
         withdrawalTxnId: parsed.withdrawal_txn_id ?? null,
         btcTxid: null,
