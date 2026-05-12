@@ -931,42 +931,23 @@ export class HashiClient {
          * Returns `0n` if simulation fails (best-effort).
          */
         depositGasEstimate: async (sender: string): Promise<DepositFees> => {
-            let gasEstimateMist = 0n;
-            try {
-                const dummyTxid = "0x" + "00".repeat(32);
-                const tx = new Transaction();
-                const utxoId = tx.add(
-                    utxoModule.utxoId({
-                        package: this.#packageId,
-                        arguments: { txid: dummyTxid, vout: 0 },
-                    }),
-                );
-                const utxo = tx.add(
-                    utxoModule.utxo({
-                        package: this.#packageId,
-                        arguments: { utxoId, amount: 100_000n, derivationPath: sender },
-                    }),
-                );
-                tx.add(this.call.deposit({ utxo }));
-                tx.setSender(sender);
-
-                const result = await this.#client.core.simulateTransaction({
-                    transaction: tx,
-                    include: { effects: true },
-                });
-                const simTx = result.Transaction ?? result.FailedTransaction;
-                if (simTx?.effects?.gasUsed) {
-                    const gas = simTx.effects.gasUsed;
-                    const total =
-                        BigInt(gas.computationCost) +
-                        BigInt(gas.storageCost) -
-                        BigInt(gas.storageRebate);
-                    gasEstimateMist = total > 0n ? (total * 120n) / 100n : 0n;
-                }
-            } catch {
-                // simulation may fail — gas estimate is best-effort
-            }
-            return { gasEstimateMist };
+            const dummyTxid = "0x" + "00".repeat(32);
+            const tx = new Transaction();
+            const utxoId = tx.add(
+                utxoModule.utxoId({
+                    package: this.#packageId,
+                    arguments: { txid: dummyTxid, vout: 0 },
+                }),
+            );
+            const utxo = tx.add(
+                utxoModule.utxo({
+                    package: this.#packageId,
+                    arguments: { utxoId, amount: 100_000n, derivationPath: sender },
+                }),
+            );
+            tx.add(this.call.deposit({ utxo }));
+            tx.setSender(sender);
+            return { gasEstimateMist: await this.#estimateGas(tx) };
         },
 
         /**
@@ -977,51 +958,35 @@ export class HashiClient {
         withdrawalFees: async (sender?: string): Promise<WithdrawalFees> => {
             const snap = await this.view.all();
 
-            const withdrawalMinimumSats = snap.bitcoinWithdrawalMinimum;
-            const worstCaseNetworkFeeSats = snap.worstCaseNetworkFee;
-
             let gasEstimateMist = 0n;
             if (sender) {
-                try {
-                    const btcType = `${this.#packageId}::btc::BTC`;
-                    const tx = new Transaction();
-                    const coin = tx.add(
-                        coinWithBalance({ type: btcType, balance: 100_000n, useGasCoin: false }),
-                    );
-                    const [balance] = tx.moveCall({
-                        package: "0x2",
-                        module: "coin",
-                        function: "into_balance",
-                        typeArguments: [btcType],
-                        arguments: [coin],
-                    });
-                    tx.add(
-                        this.call.requestWithdrawal({
-                            btc: balance,
-                            bitcoinAddress: Array(20).fill(0),
-                        }),
-                    );
-                    tx.setSender(sender);
-
-                    const result = await this.#client.core.simulateTransaction({
-                        transaction: tx,
-                        include: { effects: true },
-                    });
-                    const simTx = result.Transaction ?? result.FailedTransaction;
-                    if (simTx?.effects?.gasUsed) {
-                        const gas = simTx.effects.gasUsed;
-                        const total =
-                            BigInt(gas.computationCost) +
-                            BigInt(gas.storageCost) -
-                            BigInt(gas.storageRebate);
-                        gasEstimateMist = total > 0n ? (total * 120n) / 100n : 0n;
-                    }
-                } catch {
-                    // simulation may fail — gas estimate is best-effort
-                }
+                const btcType = `${this.#packageId}::btc::BTC`;
+                const tx = new Transaction();
+                const coin = tx.add(
+                    coinWithBalance({ type: btcType, balance: 100_000n, useGasCoin: false }),
+                );
+                const [balance] = tx.moveCall({
+                    package: "0x2",
+                    module: "coin",
+                    function: "into_balance",
+                    typeArguments: [btcType],
+                    arguments: [coin],
+                });
+                tx.add(
+                    this.call.requestWithdrawal({
+                        btc: balance,
+                        bitcoinAddress: Array(20).fill(0),
+                    }),
+                );
+                tx.setSender(sender);
+                gasEstimateMist = await this.#estimateGas(tx);
             }
 
-            return { worstCaseNetworkFeeSats, withdrawalMinimumSats, gasEstimateMist };
+            return {
+                worstCaseNetworkFeeSats: snap.worstCaseNetworkFee,
+                withdrawalMinimumSats: snap.bitcoinWithdrawalMinimum,
+                gasEstimateMist,
+            };
         },
 
         /**
@@ -1146,6 +1111,27 @@ export class HashiClient {
                     "Pass it in HashiClientOptions.",
             );
         }
+    }
+
+    async #estimateGas(tx: Transaction): Promise<bigint> {
+        try {
+            const result = await this.#client.core.simulateTransaction({
+                transaction: tx,
+                include: { effects: true },
+            });
+            const simTx = result.Transaction ?? result.FailedTransaction;
+            if (simTx?.effects?.gasUsed) {
+                const gas = simTx.effects.gasUsed;
+                const total =
+                    BigInt(gas.computationCost) +
+                    BigInt(gas.storageCost) -
+                    BigInt(gas.storageRebate);
+                return total > 0n ? (total * 120n) / 100n : 0n;
+            }
+        } catch {
+            // simulation may fail — gas estimate is best-effort
+        }
+        return 0n;
     }
 
     // ------------------------------------------------------------------
