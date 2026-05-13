@@ -1555,7 +1555,7 @@ describe("HashiClient", () => {
                 },
             } as never);
             // requests bag lookup — not found means confirmed
-            getDfSpy.mockRejectedValueOnce(new Error("not found"));
+            getDfSpy.mockRejectedValueOnce(Object.assign(new Error("not found"), { code: "dynamicFieldNotFound" }));
 
             const result = await client.hashi.view.depositStatus("test-digest");
             expect(result).not.toBeNull();
@@ -1580,7 +1580,7 @@ describe("HashiClient", () => {
                 },
             } as never);
 
-            vi.spyOn(DepositRequest, "get").mockRejectedValueOnce(new Error("not found"));
+            vi.spyOn(DepositRequest, "get").mockRejectedValueOnce(Object.assign(new Error("not found"), { code: "notExists" }));
 
             const result = await client.hashi.view.depositStatus("test-digest");
             expect(result).not.toBeNull();
@@ -1616,7 +1616,7 @@ describe("HashiClient", () => {
                 },
             } as never);
 
-            vi.spyOn(WithdrawalRequest, "get").mockRejectedValueOnce(new Error("not found"));
+            vi.spyOn(WithdrawalRequest, "get").mockRejectedValueOnce(Object.assign(new Error("not found"), { code: "notExists" }));
 
             const result = await client.hashi.view.withdrawalStatus("test-digest");
             expect(result).not.toBeNull();
@@ -1697,6 +1697,7 @@ describe("HashiClient", () => {
 
     describe("view.depositGasEstimate", () => {
         it("returns gas estimate from simulation", async () => {
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
             vi.spyOn(client.core, "simulateTransaction").mockResolvedValueOnce({
                 Transaction: {
                     effects: {
@@ -1715,6 +1716,7 @@ describe("HashiClient", () => {
         });
 
         it("returns 0n when simulation fails", async () => {
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
             vi.spyOn(client.core, "simulateTransaction").mockRejectedValueOnce(
                 new Error("simulation failed"),
             );
