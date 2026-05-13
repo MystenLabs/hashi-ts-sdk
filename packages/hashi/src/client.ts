@@ -839,8 +839,12 @@ export class HashiClient {
                     .catch(() => null);
 
                 status = reqResult?.dynamicField ? "pending" : "confirmed";
-            } catch {
-                status = "expired";
+            } catch (err) {
+                if (err instanceof Error && isObjectNotFoundError(err)) {
+                    status = "expired";
+                } else {
+                    throw err;
+                }
             }
 
             return {
@@ -911,8 +915,12 @@ export class HashiClient {
                         // best effort
                     }
                 }
-            } catch {
-                status = "cancelled";
+            } catch (err) {
+                if (err instanceof Error && isObjectNotFoundError(err)) {
+                    status = "cancelled";
+                } else {
+                    throw err;
+                }
             }
 
             return {
@@ -932,7 +940,9 @@ export class HashiClient {
          * Returns `0n` if simulation fails (best-effort).
          */
         depositGasEstimate: async (sender: string): Promise<DepositFees> => {
-            const dummyTxid = "0x" + "00".repeat(32);
+            const snap = await this.view.all();
+            const dummyAmount = snap.bitcoinDepositMinimum + 1n;
+            const dummyTxid = "0x" + "01".repeat(32);
             const tx = new Transaction();
             const utxoId = tx.add(
                 utxoModule.utxoId({
@@ -943,7 +953,7 @@ export class HashiClient {
             const utxo = tx.add(
                 utxoModule.utxo({
                     package: this.#packageId,
-                    arguments: { utxoId, amount: 100_000n, derivationPath: sender },
+                    arguments: { utxoId, amount: dummyAmount, derivationPath: sender },
                 }),
             );
             tx.add(this.call.deposit({ utxo }));
@@ -961,10 +971,11 @@ export class HashiClient {
 
             let gasEstimateMist = 0n;
             if (sender) {
+                const dummyAmount = snap.bitcoinWithdrawalMinimum + 1n;
                 const btcType = `${this.#packageId}::btc::BTC`;
                 const tx = new Transaction();
                 const coin = tx.add(
-                    coinWithBalance({ type: btcType, balance: 100_000n, useGasCoin: false }),
+                    coinWithBalance({ type: btcType, balance: dummyAmount, useGasCoin: false }),
                 );
                 const [balance] = tx.moveCall({
                     package: "0x2",
