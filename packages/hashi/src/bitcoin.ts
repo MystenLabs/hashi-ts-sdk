@@ -398,3 +398,35 @@ export function bitcoinAddressToWitnessProgram(
 
     return { version, program };
 }
+
+/**
+ * Encodes a witness program back into a bech32/bech32m Bitcoin address.
+ *
+ * Inverse of {@link bitcoinAddressToWitnessProgram}. Useful for displaying
+ * the Bitcoin address associated with a withdrawal request whose on-chain
+ * state stores only the raw witness program bytes.
+ *
+ * @param program - Raw witness program bytes (20 for P2WPKH, 32 for P2TR)
+ * @param network - Bitcoin network for the HRP
+ * @returns Encoded bech32 (v0) or bech32m (v1+) address
+ */
+export function witnessProgramToAddress(
+    program: Uint8Array,
+    network: BitcoinNetwork,
+): string {
+    const hrp = NETWORK_HRP[network];
+
+    if (program.length === 20) {
+        const words = [0, ...bech32.toWords(program)];
+        return bech32.encode(hrp, words);
+    }
+
+    if (program.length === 32) {
+        const words = [1, ...bech32m.toWords(program)];
+        return bech32m.encode(hrp, words);
+    }
+
+    throw new Error(
+        `Unsupported witness program length ${program.length}; expected 20 (P2WPKH) or 32 (P2TR).`,
+    );
+}

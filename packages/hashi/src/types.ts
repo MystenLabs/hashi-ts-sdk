@@ -18,6 +18,8 @@ export interface HashiClientOptions<Name = "HashiClient"> {
     packageId?: string;
     /** Override the auto-resolved Bitcoin network for address encoding. */
     bitcoinNetwork?: BitcoinNetwork;
+    /** Optional Bitcoin Core JSON-RPC URL for UTXO lookups and confirmation checks. */
+    btcRpcUrl?: string;
 }
 
 /**
@@ -149,4 +151,103 @@ export interface WithdrawalHistoryItem {
     readonly withdrawalTxnId: string | null;
     /** Bitcoin txid from the `WithdrawalTransaction`, in display byte order. `null` until the committee commits. */
     readonly btcTxid: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Balance
+// ---------------------------------------------------------------------------
+
+export interface HbtcBalance {
+    /** Total hBTC balance in satoshis. */
+    readonly totalBalance: bigint;
+    /** Number of coin objects held. */
+    readonly coinObjectCount: number;
+}
+
+// ---------------------------------------------------------------------------
+// Deposit status (by Sui tx digest)
+// ---------------------------------------------------------------------------
+
+export type DepositStatus = "pending" | "confirmed" | "expired" | "unknown";
+
+export interface DepositInfo {
+    /** Unique request ID on-chain. */
+    readonly requestId: string;
+    /** Deposit amount in satoshis. */
+    readonly amountSats: bigint;
+    /** Recipient Sui address (derivation path). */
+    readonly recipient: string | null;
+    /** Bitcoin transaction ID (display byte order). */
+    readonly btcTxid: string;
+    /** Bitcoin output index. */
+    readonly btcVout: number;
+    /** Request timestamp (ms since epoch). */
+    readonly timestampMs: bigint;
+    /** Current deposit status. */
+    readonly status: DepositStatus;
+    /** Sui transaction digest that created this request. */
+    readonly suiTxDigest: string;
+}
+
+// ---------------------------------------------------------------------------
+// Withdrawal status (by Sui tx digest)
+// ---------------------------------------------------------------------------
+
+export interface WithdrawalInfo {
+    /** Unique request ID on-chain. */
+    readonly requestId: string;
+    /** Withdrawal amount in satoshis. */
+    readonly btcAmountSats: bigint;
+    /** Raw witness program bytes of the destination Bitcoin address. */
+    readonly bitcoinAddress: Uint8Array;
+    /** Sui address of the requester. */
+    readonly sender: string;
+    /** Request timestamp (ms since epoch). */
+    readonly timestampMs: bigint;
+    /** Current withdrawal status. */
+    readonly status: WithdrawalStatus | "cancelled";
+    /** Sui transaction digest that created this request. */
+    readonly suiTxDigest: string;
+    /** Bitcoin txid from the `WithdrawalTransaction`, in display byte order. `null` until the committee commits. */
+    readonly btcTxid: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Fee estimation
+// ---------------------------------------------------------------------------
+
+export interface DepositFees {
+    /** Estimated gas cost in MIST. */
+    readonly gasEstimateMist: bigint;
+}
+
+export interface WithdrawalFees {
+    /** Worst-case BTC network fee in satoshis. */
+    readonly worstCaseNetworkFeeSats: bigint;
+    /** Minimum withdrawal amount in satoshis. */
+    readonly withdrawalMinimumSats: bigint;
+    /** Estimated gas cost in MIST (`0n` if `sender` was not provided). */
+    readonly gasEstimateMist: bigint;
+}
+
+// ---------------------------------------------------------------------------
+// Polling options
+// ---------------------------------------------------------------------------
+
+export interface WaitOptions {
+    /** Polling interval in milliseconds (default: 15_000). */
+    readonly intervalMs?: number;
+    /** Abort signal to cancel polling. */
+    readonly signal?: AbortSignal;
+}
+
+// ---------------------------------------------------------------------------
+// Bitcoin RPC
+// ---------------------------------------------------------------------------
+
+export interface UtxoLookupResult {
+    /** Output index. */
+    readonly vout: number;
+    /** Amount in satoshis. */
+    readonly amountSats: bigint;
 }
