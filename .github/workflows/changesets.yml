@@ -36,5 +36,4 @@ jobs:
           version: pnpm changeset-version
           publish: pnpm release
         env:
-          NPM_TOKEN: "" # OIDC trusted-publisher; see changesets/changesets#1152
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
