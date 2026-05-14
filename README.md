@@ -1,4 +1,4 @@
-# @mysten/hashi
+# @mysten-incubation/hashi
 
 TypeScript SDK for the [Hashi](https://github.com/MystenLabs/hashi) protocol — a Sui Move bridge that mints `hBTC` against Bitcoin deposits and burns it on withdrawal back to BTC.
 
@@ -20,7 +20,7 @@ pnpm build   # see note below — currently no `build` script; run `pnpm exec ts
 // 2. In your consumer project's package.json, point the dependency at the local path:
 {
   "dependencies": {
-    "@mysten/hashi": "file:../hashi-ts-sdk",
+    "@mysten-incubation/hashi": "file:../hashi-ts-sdk",
   },
 }
 ```
@@ -30,9 +30,9 @@ pnpm build   # see note below — currently no `build` script; run `pnpm exec ts
 pnpm install
 ```
 
-`@mysten/sui` and `@mysten/codegen` are peer dependencies — install them in your consumer project alongside `@mysten/hashi`.
+`@mysten/sui` and `@mysten/codegen` are peer dependencies — install them in your consumer project alongside `@mysten-incubation/hashi`.
 
-> **Heads-up.** `package.json` currently sets `main: "index.js"` but no build artifact ships in the tree, so `file:` linking will only resolve the import once a build step has produced `dist/`. Until a `build` script lands, run `pnpm exec tsc --outDir dist` from the SDK clone after `pnpm install`. Once published to npm, this whole section collapses to `pnpm add @mysten/hashi @mysten/sui`.
+> **Heads-up.** `package.json` currently sets `main: "index.js"` but no build artifact ships in the tree, so `file:` linking will only resolve the import once a build step has produced `dist/`. Until a `build` script lands, run `pnpm exec tsc --outDir dist` from the SDK clone after `pnpm install`. Once published to npm, this whole section collapses to `pnpm add @mysten-incubation/hashi @mysten/sui`.
 
 ## Setup
 
@@ -41,7 +41,7 @@ The SDK attaches to any Sui client via `$extend`. After extension, every Hashi m
 ```ts
 import { SuiGrpcClient } from "@mysten/sui/grpc";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
-import { hashi } from "@mysten/hashi";
+import { hashi } from "@mysten-incubation/hashi";
 
 const client = new SuiGrpcClient({
   network: "devnet",
