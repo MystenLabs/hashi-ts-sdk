@@ -17,7 +17,7 @@ This repo is a pnpm workspace. The SDK lives in `packages/hashi/` so it can be l
 - `sonar-project.properties` — SonarQube configuration; sources/coverage paths point into `packages/hashi/`.
 - `.github/workflows/` — CI:
   - `lint.yml`, `test.yml`, `sonarqube.yml` — formatting / unit tests / coverage on push/PR to `main`.
-  - `integration.yml` — full hashi-localnet stack (Sui localnet + BTC regtest + N validators with DKG) on every push/PR to `main`; see SEDEFI-183.
+  - `integration.yml` — full hashi-localnet stack (Sui localnet + BTC regtest + N validators with DKG) on push/PR to `main`, gated by a `paths` filter so it only fires when `packages/hashi/**`, the `hashi` submodule, `pnpm-lock.yaml`, or the workflow itself changes (SEDEFI-262); see SEDEFI-183 for the localnet design.
   - `changesets.yml` — push-to-main: opens "Version Packages" PR or publishes via OIDC.
   - `changesets-ci.yml` (currently `workflow_dispatch` only — manual until first npm publish), `changesets-ci-comment.yml` — PR-time changeset enforcement (the butterfly comment).
 - `hashi/` — git submodule ([MystenLabs/hashi](https://github.com/MystenLabs/hashi)); contains `packages/` with Sui Move contracts and `crates/e2e-tests` whose `hashi-localnet` Rust binary is built and run by the integration workflow. Goes away once Hashi contracts are on MVR.
