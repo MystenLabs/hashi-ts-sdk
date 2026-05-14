@@ -1076,9 +1076,9 @@ describe("HashiClient", () => {
         const WITHDRAWAL_REQUEST_ID = "0x" + "e0".repeat(32);
         const WITHDRAWAL_TXN_ID = "0x" + "f0".repeat(32);
 
-        // A display-order txid and its internal (reversed) form.
-        const DISPLAY_TXID = "0x" + "ab".repeat(32);
-        const INTERNAL_TXID = reverseTxidBytes(DISPLAY_TXID);
+        // A display-order txid (plain hex, no 0x) and its internal (reversed, 0x-prefixed) form.
+        const DISPLAY_TXID = "ab".repeat(32);
+        const INTERNAL_TXID = `0x${reverseTxidBytes("0x" + DISPLAY_TXID)}`;
 
         function mockBitcoinStateContent() {
             const bagFields = (id: string) => ({ id, size: "0" });

@@ -431,7 +431,7 @@ export class HashiClient {
          */
         deposit: (params: DepositParams): Transaction => {
             const tx = new Transaction();
-            const internalTxid = reverseTxidBytes(params.txid);
+            const internalTxid = `0x${reverseTxidBytes(params.txid)}`;
             for (const { vout, amountSats } of params.utxos) {
                 const utxoId = tx.add(
                     utxoModule.utxoId({
@@ -714,7 +714,7 @@ export class HashiClient {
             const fieldIds: string[] = [];
             for (const u of utxos) {
                 const keyBcs = UtxoIdBcs.serialize({
-                    txid: reverseTxidBytes(u.txid),
+                    txid: `0x${reverseTxidBytes(u.txid)}`,
                     vout: u.vout,
                 }).toBytes();
                 fieldIds.push(
