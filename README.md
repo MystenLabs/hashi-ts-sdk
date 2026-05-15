@@ -38,6 +38,8 @@ const signer = Ed25519Keypair.fromSecretKey(/* … */);
 
 > **Network support.** Only Sui **devnet** is currently wired up (Bitcoin **signet** by default). Testnet and mainnet are not yet deployed; `hashi({ network: "testnet" })` will throw until those land. To target a custom or local deployment, pass `hashiObjectId`, `packageId`, and `bitcoinNetwork` explicitly.
 
+> **Optional client options.** `hashi({ ... })` also accepts `btcRpcUrl` — a Bitcoin Core JSON-RPC URL, required for the [`client.hashi.bitcoin.*`](#bitcoin-rpc-optional) lookups — and `graphqlUrl`, which overrides the Sui GraphQL endpoint used by [`transactionHistory`](#transaction-history) (defaults to `https://fullnode.{network}.sui.io:443/graphql`).
+
 ## Quickstart: Deposit BTC → mint hBTC
 
 1. Derive the unique P2TR Bitcoin deposit address for your Sui address.
@@ -106,9 +108,87 @@ Returns the locked `hBTC` to the signer. Only the original requester can cancel,
 await client.hashi.cancelWithdrawal({ signer, requestId });
 ```
 
+## Tracking a deposit or withdrawal
+
+`deposit` and `requestWithdrawal` resolve to a transaction execution result whose `Transaction.digest` identifies the submitted Sui tx. Pass that digest to the `view.*Status` readers for a one-shot check, or to the `waitFor*` helpers to poll until a terminal state.
+
+```ts
+const digest = result.Transaction?.digest;
+
+// One-shot status check — returns null if the digest has no Hashi event.
+const deposit = await client.hashi.view.depositStatus(digest);
+// deposit?.status: "pending" | "confirmed" | "expired" | "unknown"
+
+const withdrawal = await client.hashi.view.withdrawalStatus(digest);
+// withdrawal?.status: "Requested" | "Approved" | "Processing"
+//                     | "Signed" | "Confirmed" | "cancelled"
+```
+
+To block until the committee finishes, use the polling helpers. They resolve on a terminal state — deposits on `confirmed`/`expired`, withdrawals on `Confirmed`/`cancelled`:
+
+```ts
+const info = await client.hashi.waitForDeposit(digest, {
+  intervalMs: 15_000, // default
+  signal: AbortSignal.timeout(600_000), // optional cancellation
+});
+
+const wInfo = await client.hashi.waitForWithdrawal(digest);
+// wInfo.btcTxid is populated once the committee commits the Bitcoin tx.
+```
+
+## Checking hBTC balance
+
+```ts
+const { totalBalance, coinObjectCount } = await client.hashi.view.balance(signer.toSuiAddress());
+// totalBalance — hBTC in satoshis; coinObjectCount — number of coin objects held.
+```
+
+## Transaction history
+
+`view.transactionHistory` returns a unified, newest-first list of deposits and withdrawals for a Sui address. Each item is a discriminated union — switch on `kind`:
+
+```ts
+const history = await client.hashi.view.transactionHistory(signer.toSuiAddress());
+
+for (const item of history) {
+  if (item.kind === "deposit") {
+    console.log(item.btcTxid, item.amountSats, item.approved);
+  } else {
+    console.log(item.requestId, item.btcAmountSats, item.status);
+  }
+}
+```
+
+Confirmed requests come from the on-chain index; in-flight deposits are discovered via the Sui GraphQL endpoint (`graphqlUrl`). If GraphQL is unavailable the call still returns the confirmed set.
+
+## Detecting already-used UTXOs
+
+Before submitting a deposit, check whether its outputs were already recorded — re-submitting a consumed UTXO aborts on-chain.
+
+```ts
+const results = await client.hashi.view.findUsedUtxos([
+  { txid: "0x<64-hex display-order txid>", vout: 0 },
+]);
+// results[0]: { utxoId, inActivePool, inSpentPool, isUsed }
+```
+
+## Estimating fees
+
+```ts
+// Withdrawal: worst-case BTC network fee + on-chain minimum. Pass a sender
+// to also get a dry-run gas estimate.
+const fees = await client.hashi.view.withdrawalFees(signer.toSuiAddress());
+// { worstCaseNetworkFeeSats, withdrawalMinimumSats, gasEstimateMist }
+
+// Deposit: dry-run gas estimate only.
+const { gasEstimateMist } = await client.hashi.view.depositGasEstimate(signer.toSuiAddress());
+```
+
+Gas estimation is best-effort — a failed simulation yields `0n` rather than throwing.
+
 ## Reading governance state
 
-Every protocol parameter the SDK enforces client-side (pause flag, deposit/withdrawal minimums, confirmation threshold, cooldown) is exposed under `client.hashi.view`. Prefer `view.all()` when you need 2+ values — single round-trip, internally consistent snapshot.
+Governance parameters — the pause flag, deposit/withdrawal minimums, confirmation threshold, and cancellation cooldown — are read through `client.hashi.view`, the same namespace as the balance, status, history, and fee readers above. Prefer `view.all()` when you need 2+ values — single round-trip, internally consistent snapshot.
 
 ```ts
 const snap = await client.hashi.view.all();
@@ -140,6 +220,27 @@ const tx = client.hashi.tx.deposit({ txid, utxos, recipient });
 ```
 
 Move-call thunks are also available under `client.hashi.call.*` for direct composition into hand-built PTBs.
+
+## Bitcoin RPC (optional)
+
+When the client is constructed with a `btcRpcUrl`, the `client.hashi.bitcoin.*` namespace reads the Bitcoin chain directly — useful for finding which output of a funding tx paid your deposit address, and for checking confirmations before submitting a deposit.
+
+```ts
+const client = new SuiGrpcClient({
+  network: "devnet",
+  baseUrl: "https://fullnode.devnet.sui.io:443",
+}).$extend(hashi({ network: "devnet", btcRpcUrl: "http://user:pass@127.0.0.1:8332" }));
+
+// Which output(s) of the funding tx paid the deposit address?
+const output = await client.hashi.bitcoin.lookupVout(btcTxid, btcAddress);
+const outputs = await client.hashi.bitcoin.lookupAllVouts(btcTxid, btcAddress);
+// each result: { vout, amountSats }
+
+// Confirmation count — 0 while the tx is still in the mempool.
+const confirmations = await client.hashi.bitcoin.confirmations(btcTxid);
+```
+
+Calling any `bitcoin.*` method without `btcRpcUrl` configured throws.
 
 ## Bitcoin address derivation
 
