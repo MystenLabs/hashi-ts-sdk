@@ -36,7 +36,7 @@ export function assertHex32(value: unknown, fieldName: string): void {
 export function reverseTxidBytes(txid: string): string {
     assertHex32(txid, "txid");
     const hex = txid.slice(2);
-    let reversed = "0x";
+    let reversed = "";
     for (let i = hex.length - 2; i >= 0; i -= 2) {
         reversed += hex.slice(i, i + 2);
     }

@@ -48,25 +48,21 @@ describe("reverseTxidBytes", () => {
     // user-facing (display-order) txid and the bytes that ended up on-chain
     // when the frontend recorded it via `utxo::utxo_id`.
     const DISPLAY = "0x043f682206d246cffdc23106820dc3aa87985a52cccd2d4275bbc3f492f71c0e";
-    const INTERNAL = "0x0e1cf792f4c3bb75422dcdcc525a9887aac30d820631c2fdcf46d20622683f04";
+    const INTERNAL = "0e1cf792f4c3bb75422dcdcc525a9887aac30d820631c2fdcf46d20622683f04";
 
     it("reverses display order to internal order using the real-world fixture", () => {
         expect(reverseTxidBytes(DISPLAY)).toBe(INTERNAL);
     });
 
-    it("is its own inverse — applying twice returns the original txid", () => {
-        expect(reverseTxidBytes(reverseTxidBytes(DISPLAY))).toBe(DISPLAY);
-    });
-
     it("preserves a palindromic txid (sanity: trivial case still works)", () => {
         const palindrome = `0x${"ab".repeat(32)}`;
-        expect(reverseTxidBytes(palindrome)).toBe(palindrome);
+        expect(reverseTxidBytes(palindrome)).toBe("ab".repeat(32));
     });
 
-    it("preserves the 0x prefix and produces 66 chars total", () => {
+    it("returns plain hex without 0x prefix, 64 chars", () => {
         const out = reverseTxidBytes(DISPLAY);
-        expect(out.startsWith("0x")).toBe(true);
-        expect(out.length).toBe(66);
+        expect(out.startsWith("0x")).toBe(false);
+        expect(out.length).toBe(64);
     });
 
     it("rejects malformed input via assertHex32", () => {

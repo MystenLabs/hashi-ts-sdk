@@ -1076,33 +1076,13 @@ describe("HashiClient", () => {
         const WITHDRAWAL_REQUEST_ID = "0x" + "e0".repeat(32);
         const WITHDRAWAL_TXN_ID = "0x" + "f0".repeat(32);
 
-        // A display-order txid and its internal (reversed) form.
-        const DISPLAY_TXID = "0x" + "ab".repeat(32);
-        const INTERNAL_TXID = reverseTxidBytes(DISPLAY_TXID);
-
-        function mockBitcoinStateContent() {
-            const bagFields = (id: string) => ({ id, size: "0" });
-            const objectBagFields = (id: string) => ({ id, size: "0" });
-            return BitcoinState.serialize({
-                deposit_queue: {
-                    requests: objectBagFields("0x" + "d1".repeat(32)),
-                    processed: objectBagFields("0x" + "d2".repeat(32)),
-                },
-                withdrawal_queue: {
-                    requests: objectBagFields("0x" + "c1".repeat(32)),
-                    processed: objectBagFields("0x" + "c2".repeat(32)),
-                    withdrawal_txns: objectBagFields("0x" + "c3".repeat(32)),
-                    confirmed_txns: objectBagFields("0x" + "c4".repeat(32)),
-                },
-                utxo_pool: {
-                    utxo_records: bagFields(ACTIVE_POOL_ID),
-                    spent_utxos: bagFields(SPENT_POOL_ID),
-                },
-                user_requests: bagFields(TABLE_ID),
-            }).toBytes();
-        }
+        // A display-order txid (plain hex, no 0x) and its internal (reversed, 0x-prefixed) form.
+        const DISPLAY_TXID = "ab".repeat(32);
+        const INTERNAL_TXID = `0x${reverseTxidBytes("0x" + DISPLAY_TXID)}`;
 
         function mockFetchBitcoinState() {
+            const bagFields = (id: string) => ({ id, size: "0" });
+            const objectBagFields = (id: string) => ({ id, size: "0" });
             vi.spyOn(client.core, "getDynamicField").mockResolvedValueOnce({
                 dynamicField: {
                     $kind: "DynamicField",
@@ -1115,7 +1095,23 @@ describe("HashiClient", () => {
                     valueType: `${PACKAGE_ID}::bitcoin_state::BitcoinState`,
                     value: {
                         type: `${PACKAGE_ID}::bitcoin_state::BitcoinState`,
-                        bcs: mockBitcoinStateContent(),
+                        bcs: BitcoinState.serialize({
+                            deposit_queue: {
+                                requests: objectBagFields("0x" + "d1".repeat(32)),
+                                processed: objectBagFields("0x" + "d2".repeat(32)),
+                            },
+                            withdrawal_queue: {
+                                requests: objectBagFields("0x" + "c1".repeat(32)),
+                                processed: objectBagFields("0x" + "c2".repeat(32)),
+                                withdrawal_txns: objectBagFields("0x" + "c3".repeat(32)),
+                                confirmed_txns: objectBagFields("0x" + "c4".repeat(32)),
+                            },
+                            utxo_pool: {
+                                utxo_records: bagFields(ACTIVE_POOL_ID),
+                                spent_utxos: bagFields(SPENT_POOL_ID),
+                            },
+                            user_requests: bagFields(TABLE_ID),
+                        }).toBytes(),
                     },
                     version: "1",
                     digest: "mock",
@@ -1158,6 +1154,19 @@ describe("HashiClient", () => {
                     valueType: "bool",
                 })),
             } as never);
+        }
+
+        function mockGraphQLDepositEvents(depositIds: string[]) {
+            vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({
+                data: {
+                    events: {
+                        nodes: depositIds.map((id) => ({
+                            contents: { json: { request_id: id } },
+                        })),
+                        pageInfo: { hasNextPage: false, endCursor: null },
+                    },
+                },
+            })));
         }
 
         function mockDepositRequestObject() {
@@ -1212,11 +1221,12 @@ describe("HashiClient", () => {
             };
         }
 
-        it("returns empty array when the user has no entry in user_requests", async () => {
+        it("returns empty array when user has no confirmed or pending requests", async () => {
             mockFetchBitcoinState();
             vi.spyOn(client.core, "getDynamicField").mockRejectedValueOnce(
                 new Error("not found"),
             );
+            mockGraphQLDepositEvents([]);
 
             const items = await client.hashi.view.transactionHistory(TEST_SUI_ADDRESS);
             expect(items).toEqual([]);
@@ -1229,6 +1239,7 @@ describe("HashiClient", () => {
             vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
                 objects: [mockDepositRequestObject()],
             } as never);
+            mockGraphQLDepositEvents([]);
 
             const items = await client.hashi.view.transactionHistory(TEST_SUI_ADDRESS);
 
@@ -1254,6 +1265,7 @@ describe("HashiClient", () => {
             vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
                 objects: [mockWithdrawalRequestObject()],
             } as never);
+            mockGraphQLDepositEvents([]);
 
             const items = await client.hashi.view.transactionHistory(TEST_SUI_ADDRESS);
 
@@ -1317,6 +1329,8 @@ describe("HashiClient", () => {
                 ],
             } as never);
 
+            mockGraphQLDepositEvents([]);
+
             const items = await client.hashi.view.transactionHistory(TEST_SUI_ADDRESS);
 
             expect(items).toHaveLength(1);
@@ -1327,19 +1341,20 @@ describe("HashiClient", () => {
             expect(getObjectsSpy).toHaveBeenCalledTimes(2);
         });
 
-        it("returns mixed deposit and withdrawal items", async () => {
+        it("returns mixed deposit and withdrawal items sorted by timestamp descending", async () => {
             mockFetchBitcoinState();
             mockUserBagLookup();
             mockListDynamicFields([DEPOSIT_REQUEST_ID, WITHDRAWAL_REQUEST_ID]);
             vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
                 objects: [mockDepositRequestObject(), mockWithdrawalRequestObject()],
             } as never);
+            mockGraphQLDepositEvents([]);
 
             const items = await client.hashi.view.transactionHistory(TEST_SUI_ADDRESS);
 
             expect(items).toHaveLength(2);
-            expect(items[0].kind).toBe("deposit");
-            expect(items[1].kind).toBe("withdrawal");
+            expect(items[0].kind).toBe("withdrawal");
+            expect(items[1].kind).toBe("deposit");
         });
 
         it("skips Error objects in the batch response", async () => {
@@ -1349,6 +1364,7 @@ describe("HashiClient", () => {
             vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
                 objects: [mockDepositRequestObject(), new Error("deleted")],
             } as never);
+            mockGraphQLDepositEvents([]);
 
             const items = await client.hashi.view.transactionHistory(TEST_SUI_ADDRESS);
             expect(items).toHaveLength(1);
@@ -1359,7 +1375,6 @@ describe("HashiClient", () => {
             mockFetchBitcoinState();
             mockUserBagLookup();
             mockListDynamicFields([DEPOSIT_REQUEST_ID]);
-            // Same module/struct names but a foreign package — must not be classified.
             const FOREIGN_PKG = "0x" + "ee".repeat(32);
             vi.spyOn(client.core, "getObjects").mockResolvedValueOnce({
                 objects: [
@@ -1369,6 +1384,7 @@ describe("HashiClient", () => {
                     },
                 ],
             } as never);
+            mockGraphQLDepositEvents([]);
 
             const items = await client.hashi.view.transactionHistory(TEST_SUI_ADDRESS);
             expect(items).toEqual([]);
