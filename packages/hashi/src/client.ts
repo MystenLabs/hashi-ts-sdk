@@ -1045,14 +1045,23 @@ export class HashiClient {
             }
 
             // 2. In-flight deposits via GraphQL events (not yet in user_requests).
-            const depositEventType = `${this.#packageId}::deposit::DepositRequestedEvent`;
-            const allDepositIds = await this.#queryEventRequestIds(suiAddress, depositEventType);
-            const pendingIds = allDepositIds.filter((id) => !confirmedIds.has(id));
+            //    Best-effort: if GraphQL is unavailable (e.g. localnet) we
+            //    still return the confirmed set from step 1.
+            try {
+                const depositEventType = `${this.#packageId}::deposit::DepositRequestedEvent`;
+                const allDepositIds = await this.#queryEventRequestIds(
+                    suiAddress,
+                    depositEventType,
+                );
+                const pendingIds = allDepositIds.filter((id) => !confirmedIds.has(id));
 
-            if (pendingIds.length > 0) {
-                const objects = await this.#batchGetObjects(pendingIds, { content: true });
-                const classified = this.#classifyRequestObjects(objects);
-                items.push(...classified.items);
+                if (pendingIds.length > 0) {
+                    const objects = await this.#batchGetObjects(pendingIds, { content: true });
+                    const classified = this.#classifyRequestObjects(objects);
+                    items.push(...classified.items);
+                }
+            } catch {
+                // GraphQL endpoint may not be available (localnet, custom deployments).
             }
 
             items.sort((a, b) => Number(b.timestampMs - a.timestampMs));
