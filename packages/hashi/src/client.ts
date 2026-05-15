@@ -7,9 +7,9 @@ import { Transaction, coinWithBalance } from "@mysten/sui/transactions";
 import { Hashi } from "./contracts/hashi/hashi.js";
 import { BitcoinState, BitcoinStateKey } from "./contracts/hashi/bitcoin_state.js";
 import { DepositRequest } from "./contracts/hashi/deposit_queue.js";
+import { Bag } from "./contracts/hashi/deps/sui/bag.js";
 import { WithdrawalRequest, WithdrawalTransaction } from "./contracts/hashi/withdrawal_queue.js";
 import { UtxoId as UtxoIdBcs } from "./contracts/hashi/utxo.js";
-import { Bag } from "./contracts/hashi/deps/sui/bag.js";
 import * as depositModule from "./contracts/hashi/deposit.js";
 import * as withdrawModule from "./contracts/hashi/withdraw.js";
 import * as utxoModule from "./contracts/hashi/utxo.js";
@@ -65,8 +65,19 @@ const OBJECT_BAG_ADDRESS_TYPE =
 /** Max value of an unsigned 32-bit integer; vout is a u32 on the Bitcoin side. */
 const U32_MAX = 0xffffffff;
 
-/** Max objects per `getObjects` call — Sui transports typically cap at 50. */
-const GET_OBJECTS_BATCH = 50;
+/** Max objects per `getObjects` call. */
+const GET_OBJECTS_BATCH = 500;
+
+const GRAPHQL_URLS: Record<string, string> = {
+    devnet: "https://fullnode.devnet.sui.io:443/graphql",
+    testnet: "https://fullnode.testnet.sui.io:443/graphql",
+    mainnet: "https://fullnode.mainnet.sui.io:443/graphql",
+    localnet: "http://127.0.0.1:9000/graphql",
+};
+
+function defaultGraphqlUrl(network: string): string {
+    return GRAPHQL_URLS[network] ?? GRAPHQL_URLS["mainnet"]!;
+}
 
 /**
  * Recognize the per-object errors that mean "the object (or dynamic field)
@@ -128,6 +139,7 @@ export class HashiClient {
     #packageId: string;
     #bitcoinNetwork: BitcoinNetwork;
     #btcRpcUrl: string | undefined;
+    #graphqlUrl: string;
 
     constructor({
         client,
@@ -136,6 +148,7 @@ export class HashiClient {
         packageId,
         bitcoinNetwork,
         btcRpcUrl,
+        graphqlUrl,
     }: {
         client: ClientWithCoreApi;
         network: SuiNetwork;
@@ -143,6 +156,7 @@ export class HashiClient {
         packageId?: string;
         bitcoinNetwork?: BitcoinNetwork;
         btcRpcUrl?: string;
+        graphqlUrl?: string;
     }) {
         const config = NETWORK_CONFIG[network];
         const resolvedObjectId = hashiObjectId ?? config?.hashiObjectId;
@@ -157,6 +171,7 @@ export class HashiClient {
         this.#packageId = resolvedPackageId;
         this.#bitcoinNetwork = bitcoinNetwork ?? config?.bitcoinNetwork ?? "testnet";
         this.#btcRpcUrl = btcRpcUrl;
+        this.#graphqlUrl = graphqlUrl ?? defaultGraphqlUrl(network);
     }
 
     /**
@@ -1003,30 +1018,44 @@ export class HashiClient {
 
         /**
          * Fetch the unified transaction history (deposits + withdrawals) for
-         * a Sui address. Reads from `BitcoinState.user_requests` — a Table
-         * that maps each user address to a Bag of request IDs — then batch-
-         * fetches the request objects and dispatches by Move type.
-         *
-         * Deposit items include `btcTxid` / `btcVout` extracted from the
-         * UTXO stored on the `DepositRequest`. Withdrawal items include the
-         * BTC txid from the linked `WithdrawalTransaction` once the committee
-         * has committed one.
+         * a Sui address. Confirmed requests come from the on-chain
+         * `user_requests` index; in-flight deposits are discovered via
+         * GraphQL `DepositRequestedEvent` queries (indexed by sender).
          */
         transactionHistory: async (suiAddress: string): Promise<TransactionHistoryItem[]> => {
             const btcState = await this.#fetchBitcoinState();
+
+            // 1. Confirmed requests from user_requests on-chain index.
+            const confirmedIds = new Set<string>();
+            const items: TransactionHistoryItem[] = [];
 
             const userBagId = await this.#fetchUserRequestsBagId(
                 btcState.user_requests.id,
                 suiAddress,
             );
-            if (userBagId === null) return [];
+            if (userBagId !== null) {
+                const requestIds = await this.#listAllDynamicFieldAddressKeys(userBagId);
+                if (requestIds.length > 0) {
+                    const objects = await this.#batchGetObjects(requestIds, { content: true });
+                    const classified = this.#classifyRequestObjects(objects);
+                    items.push(...classified.items);
+                    await this.#populateWithdrawalBtcTxids(items, classified.withdrawalTxnLookups);
+                    for (const id of requestIds) confirmedIds.add(id);
+                }
+            }
 
-            const requestIds = await this.#listAllDynamicFieldAddressKeys(userBagId);
-            if (requestIds.length === 0) return [];
+            // 2. In-flight deposits via GraphQL events (not yet in user_requests).
+            const depositEventType = `${this.#packageId}::deposit::DepositRequestedEvent`;
+            const allDepositIds = await this.#queryEventRequestIds(suiAddress, depositEventType);
+            const pendingIds = allDepositIds.filter((id) => !confirmedIds.has(id));
 
-            const objects = await this.#batchGetObjects(requestIds, { content: true });
-            const { items, withdrawalTxnLookups } = this.#classifyRequestObjects(objects);
-            await this.#populateWithdrawalBtcTxids(items, withdrawalTxnLookups);
+            if (pendingIds.length > 0) {
+                const objects = await this.#batchGetObjects(pendingIds, { content: true });
+                const classified = this.#classifyRequestObjects(objects);
+                items.push(...classified.items);
+            }
+
+            items.sort((a, b) => Number(b.timestampMs - a.timestampMs));
             return items;
         },
     };
@@ -1174,27 +1203,8 @@ export class HashiClient {
     }
 
     /**
-     * Batch-fetches objects in chunks of `GET_OBJECTS_BATCH`, concatenating
-     * the results. Each element is either an object or an `Error` (for
-     * missing / deleted objects).
-     */
-    async #batchGetObjects(objectIds: string[], include?: { content?: boolean }) {
-        const results: (SuiClientTypes.Object<{ content: true }> | Error)[] = [];
-        for (let i = 0; i < objectIds.length; i += GET_OBJECTS_BATCH) {
-            const batch = objectIds.slice(i, i + GET_OBJECTS_BATCH);
-            const { objects } = await this.#client.core.getObjects({
-                objectIds: batch,
-                include: include as { content: true },
-            });
-            results.push(...objects);
-        }
-        return results;
-    }
-
-    /**
      * Resolve the Bag id holding a user's request IDs from `user_requests`,
-     * or `null` if the user has never had a request (no Table entry yet —
-     * `getDynamicField` rejects rather than returning a sentinel).
+     * or `null` if the user has never had a request.
      */
     async #fetchUserRequestsBagId(tableId: string, suiAddress: string): Promise<string | null> {
         try {
@@ -1213,8 +1223,7 @@ export class HashiClient {
 
     /**
      * Enumerate every `address`-keyed dynamic field on `parentId`, paginating
-     * through `listDynamicFields` until exhausted. Decodes each `name.bcs` as
-     * a Sui address.
+     * through `listDynamicFields` until exhausted.
      */
     async #listAllDynamicFieldAddressKeys(parentId: string): Promise<string[]> {
         const keys: string[] = [];
@@ -1230,6 +1239,78 @@ export class HashiClient {
             cursor = page.hasNextPage ? page.cursor : null;
         } while (cursor);
         return keys;
+    }
+
+    /**
+     * Batch-fetches objects in chunks of `GET_OBJECTS_BATCH`, concatenating
+     * the results. Each element is either an object or an `Error` (for
+     * missing / deleted objects).
+     */
+    async #batchGetObjects(objectIds: string[], include?: { content?: boolean }) {
+        const results: (SuiClientTypes.Object<{ content: true }> | Error)[] = [];
+        for (let i = 0; i < objectIds.length; i += GET_OBJECTS_BATCH) {
+            const batch = objectIds.slice(i, i + GET_OBJECTS_BATCH);
+            const { objects } = await this.#client.core.getObjects({
+                objectIds: batch,
+                include: include as { content: true },
+            });
+            results.push(...objects);
+        }
+        return results;
+    }
+
+    /**
+     * Query the Sui GraphQL endpoint for events of a given type emitted by
+     * a sender. Returns the `request_id` from each event's JSON payload,
+     * paginating through all results.
+     */
+    async #queryEventRequestIds(sender: string, eventType: string): Promise<string[]> {
+        const ids: string[] = [];
+        let cursor: string | null = null;
+        let hasMore = true;
+
+        while (hasMore) {
+            const afterClause = cursor ? `, after: "${cursor}"` : "";
+            const query = `{
+                events(
+                    filter: { sender: "${sender}", type: "${eventType}" }
+                    first: 50${afterClause}
+                ) {
+                    nodes { contents { json } }
+                    pageInfo { hasNextPage endCursor }
+                }
+            }`;
+
+            const res = await fetch(this.#graphqlUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ query }),
+            });
+            if (!res.ok) throw new Error(`GraphQL request failed: ${res.status}`);
+
+            const body = (await res.json()) as {
+                data?: {
+                    events?: {
+                        nodes: { contents: { json: { request_id: string } } }[];
+                        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+                    };
+                };
+                errors?: { message: string }[];
+            };
+            if (body.errors?.length) {
+                throw new Error(`GraphQL error: ${body.errors[0].message}`);
+            }
+            const events = body.data?.events;
+            if (!events) break;
+
+            for (const node of events.nodes) {
+                ids.push(node.contents.json.request_id);
+            }
+            hasMore = events.pageInfo.hasNextPage;
+            cursor = events.pageInfo.endCursor ?? null;
+        }
+
+        return ids;
     }
 
     /**

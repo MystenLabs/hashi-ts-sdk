@@ -20,6 +20,8 @@ export interface HashiClientOptions<Name = "HashiClient"> {
     bitcoinNetwork?: BitcoinNetwork;
     /** Optional Bitcoin Core JSON-RPC URL for UTXO lookups and confirmation checks. */
     btcRpcUrl?: string;
+    /** Override the Sui GraphQL endpoint URL (defaults to `https://fullnode.{network}.sui.io:443/graphql`). */
+    graphqlUrl?: string;
 }
 
 /**
