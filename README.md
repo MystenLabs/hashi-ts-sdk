@@ -1,38 +1,23 @@
 # @mysten-incubation/hashi
 
+[![npm version](https://img.shields.io/npm/v/@mysten-incubation/hashi.svg)](https://www.npmjs.com/package/@mysten-incubation/hashi)
+[![Test](https://github.com/MystenLabs/hashi-ts-sdk/actions/workflows/test.yml/badge.svg)](https://github.com/MystenLabs/hashi-ts-sdk/actions/workflows/test.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 TypeScript SDK for the [Hashi](https://github.com/MystenLabs/hashi) protocol — a Sui Move bridge that mints `hBTC` against Bitcoin deposits and burns it on withdrawal back to BTC.
+
+> [!WARNING]
+> **Not production-ready.** This SDK is pre-1.0 and under active development. The API may change without notice and only Sui devnet is wired up. Do not use it in production environments yet.
 
 End-user actions only: **deposit**, **request withdrawal**, **cancel withdrawal**. Operator/committee/relayer calls are intentionally not part of this surface — those tools should import the generated bindings under `src/contracts/hashi/` directly.
 
 ## Install
 
-The SDK is **not yet published to npm** — install it from a local clone of this repo until the first release lands.
-
 ```bash
-# 1. Clone the SDK next to your consumer project.
-git clone git@github.com:MystenLabs/hashi-ts-sdk.git
-cd hashi-ts-sdk
-pnpm install
-pnpm build   # see note below — currently no `build` script; run `pnpm exec tsc --outDir dist` instead
+pnpm add @mysten-incubation/hashi @mysten/sui
 ```
 
-```jsonc
-// 2. In your consumer project's package.json, point the dependency at the local path:
-{
-  "dependencies": {
-    "@mysten-incubation/hashi": "file:../hashi-ts-sdk",
-  },
-}
-```
-
-```bash
-# 3. Install in your consumer project.
-pnpm install
-```
-
-`@mysten/sui` and `@mysten/codegen` are peer dependencies — install them in your consumer project alongside `@mysten-incubation/hashi`.
-
-> **Heads-up.** `package.json` currently sets `main: "index.js"` but no build artifact ships in the tree, so `file:` linking will only resolve the import once a build step has produced `dist/`. Until a `build` script lands, run `pnpm exec tsc --outDir dist` from the SDK clone after `pnpm install`. Once published to npm, this whole section collapses to `pnpm add @mysten-incubation/hashi @mysten/sui`.
+`@mysten/sui` is a peer dependency.
 
 ## Setup
 
@@ -159,7 +144,3 @@ Move-call thunks are also available under `client.hashi.call.*` for direct compo
 ## Bitcoin address derivation
 
 Each Sui address maps to a unique P2TR Bitcoin deposit address. The derivation replicates `fastcrypto_tbls::threshold_schnorr::key_derivation::derive_verifying_key` — see the [Hashi address-scheme docs](https://mystenlabs.github.io/hashi/design/address-scheme.html) for the full design.
-
-## License
-
-Apache-2.0
