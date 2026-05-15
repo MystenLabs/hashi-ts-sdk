@@ -103,7 +103,7 @@ describe("HashiClient.deposit (real network)", () => {
                 // Transaction history should contain the deposit with correct
                 // btcTxid and btcVout extracted from the on-chain DepositRequest.
                 const history = await client.hashi.view.transactionHistory(recipient);
-                const dep = history.find((h) => h.kind === "deposit" && h.btcTxid === funded.txid);
+                const dep = history.find((h) => h.kind === "deposit" && h.btcTxid === funded.txid.replace(/^0x/, ""));
                 expect(dep).toBeDefined();
                 expect(dep!.btcVout).toBe(funded.vout);
                 expect(dep!.amountSats).toBe(funded.amountSats);

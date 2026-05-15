@@ -138,7 +138,7 @@ describe.skipIf(!isLocalnet())("HashiClient withdrawal payout (localnet)", () =>
             );
             expect(wd).toBeDefined();
             expect(wd!.btcTxid).toBeTypeOf("string");
-            expect(wd!.btcTxid).toMatch(/^0x[0-9a-f]{64}$/);
+            expect(wd!.btcTxid).toMatch(/^[0-9a-f]{64}$/);
             // Status should be Processing, Signed, or Confirmed by this point.
             expect(["Processing", "Signed", "Confirmed"]).toContain(wd!.status);
         },
