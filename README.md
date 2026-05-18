@@ -4,7 +4,7 @@
 [![Test](https://github.com/MystenLabs/hashi-ts-sdk/actions/workflows/test.yml/badge.svg)](https://github.com/MystenLabs/hashi-ts-sdk/actions/workflows/test.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-TypeScript SDK for the [Hashi](https://github.com/MystenLabs/hashi) protocol — a Sui Move bridge that mints `hBTC` against Bitcoin deposits and burns it on withdrawal back to BTC.
+TypeScript SDK for the [Hashi](https://github.com/MystenLabs/hashi) protocol. Hashi is a decentralized Bitcoin collateralization primitive on Sui. Orchestrate native BTC directly from smart contracts—without centralized balance sheets.
 
 > [!WARNING]
 > **Not production-ready.** This SDK is pre-1.0 and under active development. The API may change without notice and only Sui devnet is wired up. Do not use it in production environments yet.
