@@ -1,5 +1,12 @@
 # @mysten-incubation/hashi
 
+## 0.1.1
+
+### Patch Changes
+
+- 5b3389e: Update README install instructions to use the published npm package
+- 72b6efc: Expand README to document the status, balance, history, fee, polling, and Bitcoin RPC APIs
+
 ## 0.1.0
 
 ### Minor Changes
