@@ -39,6 +39,7 @@ export interface GovernanceConfig {
     readonly bitcoinWithdrawalMinimum: bigint;
     readonly bitcoinConfirmationThreshold: bigint;
     readonly withdrawalCancellationCooldownMs: bigint;
+    readonly bitcoinDepositTimeDelayMs: bigint;
     readonly depositMinimum: bigint;
     readonly worstCaseNetworkFee: bigint;
 }
@@ -135,6 +136,8 @@ export interface DepositHistoryItem {
     /** `true` once the committee has approved the deposit. */
     readonly approved: boolean;
     readonly approvalTimestampMs: bigint | null;
+    /** Earliest wall-clock time (ms since epoch) at which the deposit can be confirmed. `null` until approved. */
+    readonly confirmableAtMs: bigint | null;
 }
 
 export type WithdrawalStatus = "Requested" | "Approved" | "Processing" | "Signed" | "Confirmed";
@@ -185,6 +188,10 @@ export interface DepositInfo {
     readonly btcVout: number;
     /** Request timestamp (ms since epoch). */
     readonly timestampMs: bigint;
+    /** Timestamp (ms since epoch) when the committee approved this deposit. `null` if not yet approved. */
+    readonly approvalTimestampMs: bigint | null;
+    /** Earliest wall-clock time (ms since epoch) at which the deposit can be confirmed. `null` until approved or if the config could not be read. */
+    readonly confirmableAtMs: bigint | null;
     /** Current deposit status. */
     readonly status: DepositStatus;
     /** Sui transaction digest that created this request. */

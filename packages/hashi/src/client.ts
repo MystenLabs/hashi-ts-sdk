@@ -612,6 +612,7 @@ export class HashiClient {
             bitcoinWithdrawalMinimum,
             bitcoinConfirmationThreshold: u64("bitcoin_confirmation_threshold"),
             withdrawalCancellationCooldownMs: u64("withdrawal_cancellation_cooldown_ms"),
+            bitcoinDepositTimeDelayMs: u64("bitcoin_deposit_time_delay_ms"),
             depositMinimum: bitcoinDepositMinimum,
             worstCaseNetworkFee: bitcoinWithdrawalMinimum - DUST_RELAY_MIN_VALUE,
         };
@@ -834,13 +835,27 @@ export class HashiClient {
             };
 
             let status: DepositStatus = "unknown";
+            let approvalTimestampMs: bigint | null = null;
+            let confirmableAtMs: bigint | null = null;
             try {
-                await DepositRequest.get({
+                const reqObj = await DepositRequest.get({
                     client: this.#client,
                     objectId: parsed.request_id,
                 });
 
-                const btcState = await this.#fetchBitcoinState();
+                if (reqObj.json.approval_timestamp_ms != null) {
+                    approvalTimestampMs = BigInt(reqObj.json.approval_timestamp_ms);
+                }
+
+                const [btcState, config] = await Promise.all([
+                    this.#fetchBitcoinState(),
+                    this.view.all().catch(() => null),
+                ]);
+
+                if (approvalTimestampMs !== null && config) {
+                    confirmableAtMs = approvalTimestampMs + config.bitcoinDepositTimeDelayMs;
+                }
+
                 const requestsBagId = btcState.deposit_queue.requests.id;
 
                 const reqResult = await this.#client.core
@@ -869,6 +884,8 @@ export class HashiClient {
                 btcTxid: reverseTxidBytes(parsed.utxo_id.txid),
                 btcVout: parsed.utxo_id.vout,
                 timestampMs: BigInt(parsed.timestamp_ms),
+                approvalTimestampMs,
+                confirmableAtMs,
                 status,
                 suiTxDigest,
             };
@@ -1023,7 +1040,10 @@ export class HashiClient {
          * GraphQL `DepositRequestedEvent` queries (indexed by sender).
          */
         transactionHistory: async (suiAddress: string): Promise<TransactionHistoryItem[]> => {
-            const btcState = await this.#fetchBitcoinState();
+            const [btcState, timeDelayMs] = await Promise.all([
+                this.#fetchBitcoinState(),
+                this.view.all().then((c) => c.bitcoinDepositTimeDelayMs, () => null),
+            ]);
 
             // 1. Confirmed requests from user_requests on-chain index.
             const confirmedIds = new Set<string>();
@@ -1037,7 +1057,7 @@ export class HashiClient {
                 const requestIds = await this.#listAllDynamicFieldAddressKeys(userBagId);
                 if (requestIds.length > 0) {
                     const objects = await this.#batchGetObjects(requestIds, { content: true });
-                    const classified = this.#classifyRequestObjects(objects);
+                    const classified = this.#classifyRequestObjects(objects, timeDelayMs);
                     items.push(...classified.items);
                     await this.#populateWithdrawalBtcTxids(items, classified.withdrawalTxnLookups);
                     for (const id of requestIds) confirmedIds.add(id);
@@ -1057,7 +1077,7 @@ export class HashiClient {
 
                 if (pendingIds.length > 0) {
                     const objects = await this.#batchGetObjects(pendingIds, { content: true });
-                    const classified = this.#classifyRequestObjects(objects);
+                    const classified = this.#classifyRequestObjects(objects, timeDelayMs);
                     items.push(...classified.items);
                 }
             } catch {
@@ -1331,6 +1351,7 @@ export class HashiClient {
      */
     #classifyRequestObjects(
         objects: readonly (SuiClientTypes.Object<{ content: true }> | Error)[],
+        timeDelayMs: bigint | null,
     ): {
         items: TransactionHistoryItem[];
         withdrawalTxnLookups: { itemIndex: number; txnId: string }[];
@@ -1343,7 +1364,7 @@ export class HashiClient {
         for (const obj of objects) {
             if (obj instanceof Error) continue;
             if (obj.type === depositRequestType) {
-                items.push(parseDepositHistoryItem(obj.content));
+                items.push(parseDepositHistoryItem(obj.content, timeDelayMs));
             } else if (obj.type === withdrawalRequestType) {
                 const item = parseWithdrawalHistoryItem(obj.content);
                 items.push(item);
@@ -1381,8 +1402,10 @@ export class HashiClient {
     }
 }
 
-function parseDepositHistoryItem(content: Uint8Array): DepositHistoryItem {
+function parseDepositHistoryItem(content: Uint8Array, timeDelayMs: bigint | null): DepositHistoryItem {
     const parsed = DepositRequest.parse(content);
+    const approvalTimestampMs =
+        parsed.approval_timestamp_ms === null ? null : BigInt(parsed.approval_timestamp_ms);
     return {
         kind: "deposit",
         requestId: parsed.id,
@@ -1393,10 +1416,11 @@ function parseDepositHistoryItem(content: Uint8Array): DepositHistoryItem {
         btcTxid: reverseTxidBytes(parsed.utxo.id.txid),
         btcVout: parsed.utxo.id.vout,
         approved: parsed.approval_cert !== null,
-        approvalTimestampMs:
-            parsed.approval_timestamp_ms === null
-                ? null
-                : BigInt(parsed.approval_timestamp_ms),
+        approvalTimestampMs,
+        confirmableAtMs:
+            approvalTimestampMs !== null && timeDelayMs !== null
+                ? approvalTimestampMs + timeDelayMs
+                : null,
     };
 }
 

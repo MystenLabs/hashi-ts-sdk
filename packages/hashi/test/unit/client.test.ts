@@ -93,6 +93,7 @@ const WELL_FORMED_CONFIG = [
     { key: "bitcoin_withdrawal_minimum", value: { $kind: "U64", U64: "30000" } },
     { key: "bitcoin_confirmation_threshold", value: { $kind: "U64", U64: "6" } },
     { key: "withdrawal_cancellation_cooldown_ms", value: { $kind: "U64", U64: "3600000" } },
+    { key: "bitcoin_deposit_time_delay_ms", value: { $kind: "U64", U64: "600000" } },
 ];
 
 describe("HashiClient", () => {
@@ -785,6 +786,7 @@ describe("HashiClient", () => {
                     bitcoinWithdrawalMinimum: 30_000n,
                     bitcoinConfirmationThreshold: 6n,
                     withdrawalCancellationCooldownMs: 3_600_000n,
+                    bitcoinDepositTimeDelayMs: 600_000n,
                     depositMinimum: 30_000n,
                     worstCaseNetworkFee: 30_000n - 546n,
                 });
@@ -1255,6 +1257,7 @@ describe("HashiClient", () => {
             expect(dep.amountSats).toBe(50_000n);
             expect(dep.approved).toBe(false);
             expect(dep.approvalTimestampMs).toBeNull();
+            expect(dep.confirmableAtMs).toBeNull();
             expect(dep.timestampMs).toBe(1_000n);
         });
 
@@ -1483,7 +1486,7 @@ describe("HashiClient", () => {
             } as never);
 
             vi.spyOn(DepositRequest, "get").mockResolvedValueOnce({
-                json: {},
+                json: { approval_timestamp_ms: null },
             } as never);
 
             const getDfSpy = vi.spyOn(client.core, "getDynamicField");
@@ -1521,6 +1524,8 @@ describe("HashiClient", () => {
             expect(result!.status).toBe("pending");
             expect(result!.amountSats).toBe(50_000n);
             expect(result!.btcVout).toBe(0);
+            expect(result!.approvalTimestampMs).toBeNull();
+            expect(result!.confirmableAtMs).toBeNull();
         });
 
         it("returns confirmed status when request exists but is not in the requests bag", async () => {
@@ -1542,8 +1547,10 @@ describe("HashiClient", () => {
             } as never);
 
             vi.spyOn(DepositRequest, "get").mockResolvedValueOnce({
-                json: {},
+                json: { approval_timestamp_ms: "5000" },
             } as never);
+
+            mockHashiWithConfig(WELL_FORMED_CONFIG);
 
             const getDfSpy = vi.spyOn(client.core, "getDynamicField");
             // fetchBitcoinState
@@ -1576,6 +1583,8 @@ describe("HashiClient", () => {
             const result = await client.hashi.view.depositStatus("test-digest");
             expect(result).not.toBeNull();
             expect(result!.status).toBe("confirmed");
+            expect(result!.approvalTimestampMs).toBe(5_000n);
+            expect(result!.confirmableAtMs).toBe(5_000n + 600_000n);
         });
 
         it("returns expired status when request object is not found", async () => {
@@ -1782,6 +1791,8 @@ describe("HashiClient", () => {
                 btcTxid: "0x" + "ab".repeat(32),
                 btcVout: 0,
                 timestampMs: 1_000n,
+                approvalTimestampMs: 2_000n,
+                confirmableAtMs: 602_000n,
                 status: "confirmed",
                 suiTxDigest: "test-digest",
             });
@@ -1799,6 +1810,8 @@ describe("HashiClient", () => {
                 btcTxid: "0x" + "ab".repeat(32),
                 btcVout: 0,
                 timestampMs: 1_000n,
+                approvalTimestampMs: null,
+                confirmableAtMs: null,
                 status: "expired",
                 suiTxDigest: "test-digest",
             });
