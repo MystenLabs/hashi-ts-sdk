@@ -1,5 +1,11 @@
 # @mysten-incubation/hashi
 
+## 0.2.0
+
+### Minor Changes
+
+- 5f9f592: Surface deposit time delay: add `bitcoinDepositTimeDelayMs` to `GovernanceConfig`, `approvalTimestampMs` and `confirmableAtMs` to `DepositInfo`, and `confirmableAtMs` to `DepositHistoryItem`
+
 ## 0.1.1
 
 ### Patch Changes
