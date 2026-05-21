@@ -37,6 +37,9 @@ import type {
     DepositParams,
     DepositStatus,
     GovernanceConfig,
+    GuardianInfoProvider,
+    GuardianLimiterSnapshot,
+    GuardianWithdrawCheck,
     HashiClientOptions,
     HbtcBalance,
     SuiNetwork,
@@ -56,6 +59,11 @@ import {
     lookupAllVouts,
     getTxConfirmations,
 } from "./btc-rpc.js";
+import {
+    projectCapacity,
+    estimateWaitSecs,
+    fetchGuardianInfo,
+} from "./guardian.js";
 import { assertHex32, entry, reverseTxidBytes, type ConfigEntry } from "./util.js";
 
 /** ObjectBag dynamic field name type (Wrapper<address> for dynamic_object_field lookups). */
@@ -140,6 +148,9 @@ export class HashiClient {
     #bitcoinNetwork: BitcoinNetwork;
     #btcRpcUrl: string | undefined;
     #graphqlUrl: string;
+    #guardianUrl: string | undefined;
+    #guardianInfoProvider: GuardianInfoProvider | undefined;
+    #resolvedGuardianUrl: string | null | undefined;
 
     constructor({
         client,
@@ -149,6 +160,8 @@ export class HashiClient {
         bitcoinNetwork,
         btcRpcUrl,
         graphqlUrl,
+        guardianUrl,
+        guardianInfoProvider,
     }: {
         client: ClientWithCoreApi;
         network: SuiNetwork;
@@ -157,6 +170,8 @@ export class HashiClient {
         bitcoinNetwork?: BitcoinNetwork;
         btcRpcUrl?: string;
         graphqlUrl?: string;
+        guardianUrl?: string;
+        guardianInfoProvider?: GuardianInfoProvider;
     }) {
         const config = NETWORK_CONFIG[network];
         const resolvedObjectId = hashiObjectId ?? config?.hashiObjectId;
@@ -172,6 +187,8 @@ export class HashiClient {
         this.#bitcoinNetwork = bitcoinNetwork ?? config?.bitcoinNetwork ?? "testnet";
         this.#btcRpcUrl = btcRpcUrl;
         this.#graphqlUrl = graphqlUrl ?? defaultGraphqlUrl(network);
+        this.#guardianUrl = guardianUrl;
+        this.#guardianInfoProvider = guardianInfoProvider;
     }
 
     /**
@@ -595,6 +612,7 @@ export class HashiClient {
         };
         const bool = (key: string): boolean => entry(contents, key, "Bool").Bool;
         const addr = (key: string): string => entry(contents, key, "Address").Address;
+        const str = (key: string): string => entry(contents, key, "String").String;
 
         const rawDepositMin = u64("bitcoin_deposit_minimum");
         const rawWithdrawalMin = u64("bitcoin_withdrawal_minimum");
@@ -615,6 +633,13 @@ export class HashiClient {
             bitcoinDepositTimeDelayMs: u64("bitcoin_deposit_time_delay_ms"),
             depositMinimum: bitcoinDepositMinimum,
             worstCaseNetworkFee: bitcoinWithdrawalMinimum - DUST_RELAY_MIN_VALUE,
+            guardianUrl: (() => {
+                try {
+                    return str("guardian_url");
+                } catch {
+                    return null;
+                }
+            })(),
         };
     }
 
@@ -1088,6 +1113,81 @@ export class HashiClient {
             return items;
         },
     };
+
+    // ------------------------------------------------------------------
+    // Guardian limiter (optional — requires guardianUrl or guardianInfoProvider)
+    // ------------------------------------------------------------------
+
+    guardian = {
+        /**
+         * Fetch the guardian rate-limiter state and compute derived fields.
+         */
+        limiterStatus: async (): Promise<GuardianLimiterSnapshot> => {
+            const provider = await this.#resolveGuardianProvider();
+            const info = await provider();
+            const nowSecs = BigInt(Math.floor(Date.now() / 1000));
+            const availableNowSats = projectCapacity(info.limiterConfig, info.limiterState, nowSecs);
+            const max = info.limiterConfig.maxBucketCapacitySats;
+            const bucketFillPercent = max > 0n ? Number((availableNowSats * 100n) / max) : 0;
+            let fullAtSecs: bigint | null = null;
+            if (availableNowSats < max && info.limiterConfig.refillRateSatsPerSec > 0n) {
+                const deficit = max - availableNowSats;
+                const secsToFull =
+                    (deficit + info.limiterConfig.refillRateSatsPerSec - 1n) /
+                    info.limiterConfig.refillRateSatsPerSec;
+                fullAtSecs = nowSecs + secsToFull;
+            }
+            return {
+                state: info.limiterState,
+                config: info.limiterConfig,
+                availableNowSats,
+                bucketFillPercent,
+                fullAtSecs,
+            };
+        },
+
+        /**
+         * Check whether the guardian can sign a withdrawal of `amountSats` right now.
+         */
+        canWithdraw: async (amountSats: bigint): Promise<GuardianWithdrawCheck> => {
+            const provider = await this.#resolveGuardianProvider();
+            const info = await provider();
+            const nowSecs = BigInt(Math.floor(Date.now() / 1000));
+            const availableNowSats = projectCapacity(info.limiterConfig, info.limiterState, nowSecs);
+            const wait = estimateWaitSecs(
+                info.limiterConfig,
+                info.limiterState,
+                amountSats,
+                nowSecs,
+            );
+            return { allowed: availableNowSats >= amountSats, availableNowSats, estimatedWaitSecs: wait };
+        },
+    };
+
+    async #resolveGuardianProvider(): Promise<GuardianInfoProvider> {
+        if (this.#guardianInfoProvider) return this.#guardianInfoProvider;
+        let url = this.#guardianUrl;
+        if (!url) {
+            if (this.#resolvedGuardianUrl === undefined) {
+                try {
+                    const config = await this.view.all();
+                    this.#resolvedGuardianUrl = config.guardianUrl;
+                } catch {
+                    this.#resolvedGuardianUrl = null;
+                }
+            }
+            url = this.#resolvedGuardianUrl ?? undefined;
+        }
+        if (!url) {
+            throw new Error(
+                "Guardian URL is required for guardian operations. " +
+                    "Pass guardianUrl or guardianInfoProvider in HashiClientOptions, " +
+                    "or ensure the on-chain config includes guardian_url.",
+            );
+        }
+        const guardianUrl = url;
+        return () => fetchGuardianInfo(guardianUrl);
+    }
 
     // ------------------------------------------------------------------
     // Polling helpers

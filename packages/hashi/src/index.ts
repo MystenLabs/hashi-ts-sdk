@@ -16,6 +16,7 @@ export {
     taprootScriptPathAddress,
     witnessProgramToAddress,
 } from "./bitcoin.js";
+export { projectCapacity, estimateWaitSecs } from "./guardian.js";
 export type {
     BitcoinNetwork,
     CancelWithdrawalParams,
@@ -25,9 +26,15 @@ export type {
     DepositParams,
     DepositStatus,
     GovernanceConfig,
+    GuardianInfoProvider,
+    GuardianLimiterConfig,
+    GuardianLimiterSnapshot,
+    GuardianLimiterState,
+    GuardianWithdrawCheck,
     HashiClientOptions,
     HbtcBalance,
     NetworkConfig,
+    RawGuardianInfo,
     SuiNetwork,
     TransactionHistoryItem,
     UtxoId,

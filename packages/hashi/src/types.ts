@@ -22,6 +22,10 @@ export interface HashiClientOptions<Name = "HashiClient"> {
     btcRpcUrl?: string;
     /** Override the Sui GraphQL endpoint URL (defaults to `https://fullnode.{network}.sui.io:443/graphql`). */
     graphqlUrl?: string;
+    /** Override the guardian URL (takes precedence over the on-chain `guardian_url` config value). */
+    guardianUrl?: string;
+    /** Custom guardian info provider. When set, the SDK calls this instead of fetching from `guardianUrl`. */
+    guardianInfoProvider?: GuardianInfoProvider;
 }
 
 /**
@@ -42,6 +46,8 @@ export interface GovernanceConfig {
     readonly bitcoinDepositTimeDelayMs: bigint;
     readonly depositMinimum: bigint;
     readonly worstCaseNetworkFee: bigint;
+    /** Guardian gRPC/HTTP URL from on-chain config. `null` if not set. */
+    readonly guardianUrl: string | null;
 }
 
 /**
@@ -259,4 +265,50 @@ export interface UtxoLookupResult {
     readonly vout: number;
     /** Amount in satoshis. */
     readonly amountSats: bigint;
+}
+
+// ---------------------------------------------------------------------------
+// Guardian limiter
+// ---------------------------------------------------------------------------
+
+export interface GuardianLimiterState {
+    /** Available tokens in satoshis at the time of the snapshot. */
+    readonly numTokensAvailableSats: bigint;
+    /** Unix timestamp (seconds) when the bucket was last updated. */
+    readonly lastUpdatedAtSecs: bigint;
+    /** Next expected withdrawal sequence number. */
+    readonly nextSeq: bigint;
+}
+
+export interface GuardianLimiterConfig {
+    /** Token refill rate in satoshis per second. */
+    readonly refillRateSatsPerSec: bigint;
+    /** Maximum bucket capacity in satoshis. */
+    readonly maxBucketCapacitySats: bigint;
+}
+
+export interface RawGuardianInfo {
+    readonly limiterState: GuardianLimiterState;
+    readonly limiterConfig: GuardianLimiterConfig;
+}
+
+export interface GuardianLimiterSnapshot {
+    readonly state: GuardianLimiterState;
+    readonly config: GuardianLimiterConfig;
+    /** Projected available tokens (sats) accounting for refill since the snapshot. */
+    readonly availableNowSats: bigint;
+    /** Bucket fill percentage (0–100). */
+    readonly bucketFillPercent: number;
+    /** Unix seconds at which the bucket will be full (assuming no withdrawals). `null` if already full. */
+    readonly fullAtSecs: bigint | null;
+}
+
+export type GuardianInfoProvider = () => Promise<RawGuardianInfo>;
+
+export interface GuardianWithdrawCheck {
+    readonly allowed: boolean;
+    /** Current available capacity in sats. */
+    readonly availableNowSats: bigint;
+    /** Estimated seconds until `amountSats` becomes available. `0n` if already available; `null` if the amount exceeds max bucket capacity. */
+    readonly estimatedWaitSecs: bigint | null;
 }

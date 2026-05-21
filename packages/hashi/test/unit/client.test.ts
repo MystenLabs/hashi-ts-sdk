@@ -789,6 +789,7 @@ describe("HashiClient", () => {
                     bitcoinDepositTimeDelayMs: 600_000n,
                     depositMinimum: 30_000n,
                     worstCaseNetworkFee: 30_000n - 546n,
+                    guardianUrl: null,
                 });
             });
 
