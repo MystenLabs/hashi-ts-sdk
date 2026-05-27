@@ -56,6 +56,25 @@ const TEST_MPC_KEY_ARKWORKS = sec1ToArkworks(TEST_MPC_KEY);
 const TEST_SUI_ADDRESS = "0xabcdef0000000000000000000000000000000000000000000000000000000001";
 
 /**
+ * 32-byte x-only guardian BTC pubkey for tests. Matches the
+ * `TEST_ENCLAVE_BTC_SK = [1u8; 32]` constant in
+ * `crates/hashi-types/src/guardian/bitcoin_utils.rs`, so SDK tests stay
+ * cross-language-consistent with the bridge.
+ */
+const TEST_GUARDIAN_BTC_X_ONLY = secp256k1.getPublicKey(new Uint8Array(32).fill(1), true).slice(1);
+
+/** 32-byte Ed25519 attestation pubkey placeholder for tests. */
+const TEST_GUARDIAN_ED25519_KEY = new Uint8Array(32).fill(7);
+
+/** Convenience: the `Bytes` config entry for the guardian BTC pubkey. */
+function guardianBtcConfigEntry(bytes: Uint8Array = TEST_GUARDIAN_BTC_X_ONLY) {
+    return {
+        key: "guardian_btc_public_key",
+        value: { $kind: "Bytes", Bytes: Array.from(bytes) },
+    };
+}
+
+/**
  * Build a mocked `Hashi.get()` response with a custom config `contents` array.
  * Other fields carry minimal-but-valid placeholders so the BCS-decoded json
  * shape matches what the SDK expects.
@@ -115,99 +134,20 @@ describe("HashiClient", () => {
     });
 
     describe("generateDepositAddress", () => {
-        it("generates a deposit address by fetching MPC key from on-chain", async () => {
-            // Mock Hashi.get to return a fake object with our test MPC key
-            vi.spyOn(Hashi, "get").mockResolvedValueOnce({
-                json: {
-                    id: HASHI_OBJECT_ID,
-                    committee_set: {
-                        members: HASHI_OBJECT_ID,
-                        epoch: 0n,
-                        committees: HASHI_OBJECT_ID,
-                        pending_epoch_change: null,
-                        mpc_public_key: Array.from(TEST_MPC_KEY_ARKWORKS),
-                    },
-                    config: {
-                        config: { contents: [] },
-                        enabled_versions: { contents: [] },
-                        upgrade_cap: null,
-                    },
-                    treasury: { objects: HASHI_OBJECT_ID },
-                    proposals: HASHI_OBJECT_ID,
-                    tob: HASHI_OBJECT_ID,
-                    num_consumed_presigs: 0n,
-                },
-            } as never);
-
-            const btcAddress = await client.hashi.generateDepositAddress({
-                suiAddress: TEST_SUI_ADDRESS,
-            });
-
-            // Verify it matches the pure-function output
-            const expected = generateDepositAddress(
-                TEST_MPC_KEY,
-                fromHex(TEST_SUI_ADDRESS),
-                "regtest",
-            );
-            expect(btcAddress).toBe(expected);
-            expect(btcAddress).toMatch(/^bcrt1p/);
-        });
-
-        it("throws when MPC key is not yet available", async () => {
-            vi.spyOn(Hashi, "get").mockResolvedValueOnce({
-                json: {
-                    id: HASHI_OBJECT_ID,
-                    committee_set: {
-                        members: HASHI_OBJECT_ID,
-                        epoch: 0n,
-                        committees: HASHI_OBJECT_ID,
-                        pending_epoch_change: null,
-                        mpc_public_key: [], // empty — DKG not done
-                    },
-                    config: {
-                        config: { contents: [] },
-                        enabled_versions: { contents: [] },
-                        upgrade_cap: null,
-                    },
-                    treasury: { objects: HASHI_OBJECT_ID },
-                    proposals: HASHI_OBJECT_ID,
-                    tob: HASHI_OBJECT_ID,
-                    num_consumed_presigs: 0n,
-                },
-            } as never);
-
-            await expect(
-                client.hashi.generateDepositAddress({
-                    suiAddress: TEST_SUI_ADDRESS,
-                }),
-            ).rejects.toThrow("MPC public key not available");
-        });
-
-        it.todo("derives a BTC deposit address from a live devnet MPC key", async () => {
-            const devnetClient = new SuiGrpcClient({
-                network: "devnet",
-                baseUrl: "https://fullnode.devnet.sui.io:443",
-            }).$extend(hashi({ network: "devnet" }));
-
-            const suiAddress = "0xe40c8cf8b53822829b3a6dc9aea84b62653f60b771e9da4bd4e214cae851b87b";
-
-            const btcAddress = await devnetClient.hashi.generateDepositAddress({
-                suiAddress,
-            });
-
-            console.log("BTC deposit address:", btcAddress);
-            console.log("Sui address:", suiAddress);
-
-            // signet/testnet addresses start with tb1p
-            expect(btcAddress).toMatch(/^tb1p/);
-            expect(btcAddress.length).toBeGreaterThan(40);
-            // Should match the address shown in the frontend: https://devnet.hashi.sui.io/deposit
-            expect(btcAddress).toEqual(
-                "tb1paf8w48vlsy0k9pyrt6rrjcj2nxnm00cemf0enn84qu3936qxaa7qzd8ex2",
-            );
-        });
-
-        it("allows overriding the network per call", async () => {
+        /**
+         * Build a `Hashi.get()` mock with both the MPC arkworks key and a
+         * configurable governance config. The full `Hashi.get` is called once
+         * by `view.mpcPublicKey()` and once by `view.all()` (the new
+         * implementation parallelizes them) — use `mockResolvedValue` (not
+         * `Once`) so both reads see the same response.
+         */
+        function mockHashiWithMpcAndConfig(
+            mpcArkworks: Uint8Array | number[],
+            configContents: ReadonlyArray<{
+                key: string;
+                value: { $kind: string; [k: string]: unknown };
+            }>,
+        ) {
             vi.spyOn(Hashi, "get").mockResolvedValue({
                 json: {
                     id: HASHI_OBJECT_ID,
@@ -216,10 +156,10 @@ describe("HashiClient", () => {
                         epoch: 0n,
                         committees: HASHI_OBJECT_ID,
                         pending_epoch_change: null,
-                        mpc_public_key: Array.from(TEST_MPC_KEY_ARKWORKS),
+                        mpc_public_key: Array.from(mpcArkworks),
                     },
                     config: {
-                        config: { contents: [] },
+                        config: { contents: configContents },
                         enabled_versions: { contents: [] },
                         upgrade_cap: null,
                     },
@@ -229,6 +169,95 @@ describe("HashiClient", () => {
                     num_consumed_presigs: 0n,
                 },
             } as never);
+        }
+
+        it("generates a deposit address by fetching MPC + guardian keys from on-chain", async () => {
+            mockHashiWithMpcAndConfig(TEST_MPC_KEY_ARKWORKS, [
+                ...WELL_FORMED_CONFIG,
+                guardianBtcConfigEntry(),
+            ]);
+
+            const btcAddress = await client.hashi.generateDepositAddress({
+                suiAddress: TEST_SUI_ADDRESS,
+            });
+
+            // Matches the pure-function output for the same inputs.
+            const expected = generateDepositAddress({
+                mpcMasterCompressed: TEST_MPC_KEY,
+                guardianBtcXOnly: TEST_GUARDIAN_BTC_X_ONLY,
+                suiAddress: fromHex(TEST_SUI_ADDRESS),
+                network: "regtest",
+            });
+            expect(btcAddress).toBe(expected);
+            expect(btcAddress).toMatch(/^bcrt1p/);
+        });
+
+        it("throws when MPC key is not yet available", async () => {
+            mockHashiWithMpcAndConfig([], [...WELL_FORMED_CONFIG, guardianBtcConfigEntry()]);
+
+            const err = await client.hashi
+                .generateDepositAddress({ suiAddress: TEST_SUI_ADDRESS })
+                .catch((e) => e);
+            expect(err).toBeInstanceOf(HashiConfigError);
+            expect((err as HashiConfigError).key).toBe("committee_set.mpc_public_key");
+        });
+
+        it("throws HashiConfigError when guardian_btc_public_key is not on-chain", async () => {
+            // MPC key present, guardian key absent (pre-feature deployment).
+            mockHashiWithMpcAndConfig(TEST_MPC_KEY_ARKWORKS, WELL_FORMED_CONFIG);
+
+            const err = await client.hashi
+                .generateDepositAddress({ suiAddress: TEST_SUI_ADDRESS })
+                .catch((e) => e);
+            expect(err).toBeInstanceOf(HashiConfigError);
+            expect((err as HashiConfigError).key).toBe("guardian_btc_public_key");
+        });
+
+        it("throws HashiConfigError when guardian_btc_public_key has wrong length", async () => {
+            mockHashiWithMpcAndConfig(TEST_MPC_KEY_ARKWORKS, [
+                ...WELL_FORMED_CONFIG,
+                {
+                    key: "guardian_btc_public_key",
+                    value: { $kind: "Bytes", Bytes: Array.from(new Uint8Array(20)) },
+                },
+            ]);
+
+            // The malformed-length check runs inside `view.all()`, which the
+            // new `generateDepositAddress` triggers as part of its parallel read.
+            const err = await client.hashi
+                .generateDepositAddress({ suiAddress: TEST_SUI_ADDRESS })
+                .catch((e) => e);
+            expect(err).toBeInstanceOf(HashiConfigError);
+            expect((err as HashiConfigError).key).toBe("guardian_btc_public_key");
+            expect(err.message).toMatch(/expected 32 bytes, got 20/);
+        });
+
+        it.todo(
+            "derives a BTC deposit address from a live devnet MPC + guardian key",
+            async () => {
+                const devnetClient = new SuiGrpcClient({
+                    network: "devnet",
+                    baseUrl: "https://fullnode.devnet.sui.io:443",
+                }).$extend(hashi({ network: "devnet" }));
+
+                const suiAddress =
+                    "0xe40c8cf8b53822829b3a6dc9aea84b62653f60b771e9da4bd4e214cae851b87b";
+
+                const btcAddress = await devnetClient.hashi.generateDepositAddress({ suiAddress });
+
+                // signet/testnet addresses start with tb1p
+                expect(btcAddress).toMatch(/^tb1p/);
+                expect(btcAddress.length).toBeGreaterThan(40);
+                // Replace with the new 2-of-2 reference address once devnet is
+                // redeployed with the guardian BTC pubkey published.
+            },
+        );
+
+        it("allows overriding the network per call", async () => {
+            mockHashiWithMpcAndConfig(TEST_MPC_KEY_ARKWORKS, [
+                ...WELL_FORMED_CONFIG,
+                guardianBtcConfigEntry(),
+            ]);
 
             // Client default is regtest, but we override to testnet
             const addr = await client.hashi.generateDepositAddress({
@@ -765,9 +794,9 @@ describe("HashiClient", () => {
                     },
                 } as never);
 
-                await expect(client.hashi.view.mpcPublicKey()).rejects.toThrow(
-                    "MPC public key not available",
-                );
+                const err = await client.hashi.view.mpcPublicKey().catch((e) => e);
+                expect(err).toBeInstanceOf(HashiConfigError);
+                expect((err as HashiConfigError).key).toBe("committee_set.mpc_public_key");
             });
         });
 
@@ -789,7 +818,43 @@ describe("HashiClient", () => {
                     bitcoinDepositTimeDelayMs: 600_000n,
                     depositMinimum: 30_000n,
                     worstCaseNetworkFee: 30_000n - 546n,
+                    // WELL_FORMED_CONFIG has no guardian entries — pre-feature shape.
+                    guardianUrl: null,
+                    guardianPublicKey: null,
+                    guardianBtcPublicKey: null,
                 });
+            });
+
+            it("all() surfaces guardian config keys when set on-chain", async () => {
+                mockHashiWithConfig([
+                    ...WELL_FORMED_CONFIG,
+                    { key: "guardian_url", value: { $kind: "String", String: "https://g.example" } },
+                    {
+                        key: "guardian_public_key",
+                        value: { $kind: "Bytes", Bytes: Array.from(TEST_GUARDIAN_ED25519_KEY) },
+                    },
+                    guardianBtcConfigEntry(),
+                ]);
+
+                const snap = await client.hashi.view.all();
+                expect(snap.guardianUrl).toBe("https://g.example");
+                expect(snap.guardianPublicKey).toEqual(TEST_GUARDIAN_ED25519_KEY);
+                expect(snap.guardianBtcPublicKey).toEqual(TEST_GUARDIAN_BTC_X_ONLY);
+            });
+
+            it("all() throws when guardian_public_key has wrong length", async () => {
+                mockHashiWithConfig([
+                    ...WELL_FORMED_CONFIG,
+                    {
+                        key: "guardian_public_key",
+                        value: { $kind: "Bytes", Bytes: Array.from(new Uint8Array(33)) },
+                    },
+                ]);
+
+                const err = await client.hashi.view.all().catch((e) => e);
+                expect(err).toBeInstanceOf(HashiConfigError);
+                expect((err as HashiConfigError).key).toBe("guardian_public_key");
+                expect(err.message).toMatch(/expected 32 bytes, got 33/);
             });
 
             it("floors bitcoin_deposit_minimum to DUST_RELAY_MIN_VALUE (546)", async () => {

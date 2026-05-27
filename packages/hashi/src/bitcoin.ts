@@ -3,29 +3,38 @@
  *
  * Hashi bridges Bitcoin and Sui by assigning each Sui address a unique Bitcoin
  * deposit address. When BTC is sent to that address, the Hashi MPC committee
- * detects the deposit and mints equivalent tokens on Sui.
+ * and the Hashi guardian co-sign the withdrawal that spends it, and the bridge
+ * mints equivalent tokens on Sui.
  *
- * The deposit address is a Pay-to-Taproot (P2TR / BIP-341) script-path address
- * whose spending condition is a single `OP_CHECKSIG` against a child public key
- * derived from the MPC committee's master key and the depositor's Sui address.
+ * The deposit address is a 2-of-2 Pay-to-Taproot (P2TR / BIP-341) script-path
+ * address whose spending condition is `multi_a(2, guardian_btc_pubkey,
+ * derive(mpc_master, sui_address))` — both the guardian enclave's BIP-340 key
+ * and the MPC-derived child key must produce a Schnorr signature to spend.
  *
  * The full derivation pipeline is:
  *
- * 1. **Fetch** the MPC master key from on-chain (`CommitteeSet.mpc_public_key`).
- *    The on-chain bytes use the arkworks compressed format (little-endian x +
- *    flag byte), so they must first be converted to SEC1 via
- *    {@link arkworksToSec1Compressed} — this is done automatically by the
- *    client's `view.mpcPublicKey()` method.
+ * 1. **Fetch** the MPC master key from on-chain (`CommitteeSet.mpc_public_key`)
+ *    and the guardian's BTC public key from the on-chain config
+ *    (`guardian_btc_public_key`). The MPC bytes use the arkworks compressed
+ *    format and must first be converted to SEC1 via
+ *    {@link arkworksToSec1Compressed} — done automatically by the client's
+ *    `view.mpcPublicKey()`. The guardian key is already in BIP-340 x-only form.
  *
- * 2. **Derive** a child key: `child = masterKey + HKDF-SHA3-256(x ‖ suiAddr) × G`
+ * 2. **Derive** a child MPC key: `child = masterKey + HKDF-SHA3-256(x ‖ suiAddr) × G`
  *    (see {@link deriveChildPubkey}). This replicates the Rust function
  *    `fastcrypto_tbls::threshold_schnorr::key_derivation::derive_verifying_key`.
  *
- * 3. **Build** the taproot address: `tr(NUMS, pk(child))` where NUMS is a
- *    Nothing-Up-My-Sleeve point with no known private key, forcing all spends
- *    through the script path (see {@link taprootScriptPathAddress}).
+ * 3. **Build** the taproot address: `tr(NUMS, multi_a(2, guardian, child))`
+ *    where NUMS is a Nothing-Up-My-Sleeve point with no known private key,
+ *    forcing all spends through the script path (see
+ *    {@link twoOfTwoTaprootScriptPathAddress}).
  *
  * The end-to-end helper {@link generateDepositAddress} combines steps 2–3.
+ *
+ * Mirrors `two_of_two_taproot_script_path_address` in
+ * `crates/hashi-types/src/guardian/bitcoin_utils.rs`. Cross-language test
+ * vectors live in both this file's unit tests and the matching Rust unit test
+ * `cross_lang_2of2_test_vectors`.
  *
  * @see https://mystenlabs.github.io/hashi/design/address-scheme.html
  */
@@ -246,39 +255,143 @@ export function taprootScriptPathAddress(pubkey: Uint8Array, network: BitcoinNet
 }
 
 /**
- * Generates a Bitcoin P2TR deposit address for a Sui address.
+ * Builds a 2-of-2 P2TR script-path-only address:
+ * `tr(NUMS, multi_a(2, guardian, derived_mpc))`.
  *
- * This is the main entry point for the address derivation pipeline. Given the
- * MPC master key and a Sui address, it produces the unique Bitcoin deposit
- * address where a user should send BTC in order to receive bridged tokens on
- * Sui.
+ * The leaf script is a BIP-342 `multi_a` 2-of-2 — both Schnorr signatures must
+ * be present to spend, ordered so that the witness stack is
+ * `[derived_mpc_sig, guardian_sig, leaf_script, control_block]` (LIFO). This
+ * is the exact script the bridge's withdrawal path constructs in
+ * `crates/hashi-types/src/guardian/bitcoin_utils.rs`'s `compute_taproot_descriptor`.
  *
- * Combines {@link deriveChildPubkey} (child key derivation) and
- * {@link taprootScriptPathAddress} (taproot address construction) into a
- * single call.
+ * The leaf script is exactly 70 bytes:
  *
- * The current devnet address scheme uses a single-key script path:
  * ```text
- * tr(NUMS, pk(derive(H, d)))
+ * 0x20 ‖ guardian   (32)   // OP_PUSHBYTES_32 <pk1>
+ * 0xAC                     // OP_CHECKSIG
+ * 0x20 ‖ derived_mpc(32)   // OP_PUSHBYTES_32 <pk2>
+ * 0xBA                     // OP_CHECKSIGADD
+ * 0x52                     // OP_2 (push small int 2)
+ * 0x9C                     // OP_NUMEQUAL
  * ```
- * where `H` is the MPC master key and `d` is the depositor's Sui address.
  *
- * For mainnet the descriptor will include the guardian key:
- * `tr(NUMS, multi_a(2, guardian, derive(H, d)))` — not yet implemented here.
+ * Note `0x52` (OP_2) — not `0x01 0x02` — because `rust-miniscript`'s `multi_a`
+ * codegen routes through `Builder::push_int(2)` which emits the small-num
+ * opcode. A literal pushdata would change the leaf hash and the address.
  *
- * @param mpcKeyCompressed - 33-byte SEC1 compressed secp256k1 MPC public key
- *   (the MPC master key, after arkworks-to-SEC1 conversion)
- * @param suiAddress - 32-byte Sui address
- * @param network - Bitcoin network (determines the bech32m address prefix)
- * @returns bech32m-encoded P2TR deposit address (e.g. `tb1p…` for signet)
+ * The taproot output key is computed per BIP-341:
+ *
+ * ```text
+ * leafHash  = tagged_hash("TapLeaf",  0xC0 ‖ compact_size(script) ‖ script)
+ * tweak     = tagged_hash("TapTweak", NUMS ‖ leafHash)
+ * outputKey = NUMS + tweak × G
+ * ```
+ *
+ * **Argument ordering is load-bearing.** Guardian first, derived-MPC second.
+ * Swapping them produces a different (but real-looking) `tb1p…` whose
+ * withdrawals the bridge cannot spend.
+ *
+ * @param guardianBtcXOnly - 32-byte BIP-340 x-only guardian BTC public key
+ *   (from the on-chain `guardian_btc_public_key` config)
+ * @param derivedMpcXOnly - 32-byte x-only public key for the MPC-derived child
+ *   (output of {@link deriveChildPubkey})
+ * @param network - Bitcoin network for the bech32m human-readable prefix
+ * @returns bech32m-encoded P2TR address (e.g. `bc1p…`, `tb1p…`, `bcrt1p…`)
  */
-export function generateDepositAddress(
-    mpcKeyCompressed: Uint8Array,
-    suiAddress: Uint8Array,
+export function twoOfTwoTaprootScriptPathAddress(
+    guardianBtcXOnly: Uint8Array,
+    derivedMpcXOnly: Uint8Array,
     network: BitcoinNetwork,
 ): string {
-    const childXOnly = deriveChildPubkey(mpcKeyCompressed, suiAddress);
-    return taprootScriptPathAddress(childXOnly, network);
+    if (guardianBtcXOnly.length !== 32) {
+        throw new Error(
+            `Expected 32-byte x-only guardian pubkey, got ${guardianBtcXOnly.length}`,
+        );
+    }
+    if (derivedMpcXOnly.length !== 32) {
+        throw new Error(
+            `Expected 32-byte x-only derived MPC pubkey, got ${derivedMpcXOnly.length}`,
+        );
+    }
+
+    // Tapscript:
+    //   OP_PUSHBYTES_32 <guardian>    OP_CHECKSIG
+    //   OP_PUSHBYTES_32 <derived_mpc> OP_CHECKSIGADD
+    //   OP_2 OP_NUMEQUAL
+    const tapscript = new Uint8Array(70);
+    tapscript[0] = 0x20; // OP_PUSHBYTES_32
+    tapscript.set(guardianBtcXOnly, 1);
+    tapscript[33] = 0xac; // OP_CHECKSIG
+    tapscript[34] = 0x20; // OP_PUSHBYTES_32
+    tapscript.set(derivedMpcXOnly, 35);
+    tapscript[67] = 0xba; // OP_CHECKSIGADD
+    tapscript[68] = 0x52; // OP_2
+    tapscript[69] = 0x9c; // OP_NUMEQUAL
+
+    // BIP-341 leaf hash: tagged_hash("TapLeaf", leaf_version ‖ compact_size(len) ‖ script).
+    // tapscript.length === 70 < 253 → compact_size is a single byte.
+    const leafPrefix = new Uint8Array([0xc0, tapscript.length]);
+    const leafHash = taggedHash("TapLeaf", leafPrefix, tapscript);
+
+    // Tweak (BIP-341): tagged_hash("TapTweak", internal_key ‖ merkle_root).
+    // Single-leaf tree → merkle root IS the leaf hash.
+    const tweak = taggedHash("TapTweak", NUMS_KEY, leafHash);
+    const tweakScalar = bytesToNumberBE(tweak) % CURVE_ORDER;
+
+    // Output key = NUMS + tweak × G
+    const outputPoint = NUMS_POINT.add(Point.BASE.multiply(tweakScalar));
+    const outputKey = outputPoint.toBytes(true).slice(1); // 32-byte x-only
+
+    const words = [1, ...bech32m.toWords(outputKey)];
+    return bech32m.encode(NETWORK_HRP[network], words);
+}
+
+/**
+ * Named-args input bundle for {@link generateDepositAddress}. Using named args
+ * avoids the foot-gun of two 32-byte `Uint8Array`s in adjacent positions —
+ * swapping `guardianBtcXOnly` and `suiAddress` would silently produce a valid
+ * but wrong address.
+ */
+export interface DepositAddressInputs {
+    /**
+     * 33-byte SEC1-compressed secp256k1 MPC master key (post-arkworks
+     * conversion). See {@link arkworksToSec1Compressed}.
+     */
+    readonly mpcMasterCompressed: Uint8Array;
+    /**
+     * 32-byte BIP-340 x-only guardian BTC public key (from the on-chain
+     * `guardian_btc_public_key` config).
+     */
+    readonly guardianBtcXOnly: Uint8Array;
+    /** 32-byte Sui address used as the derivation path. */
+    readonly suiAddress: Uint8Array;
+    /** Bitcoin network (determines the bech32m address prefix). */
+    readonly network: BitcoinNetwork;
+}
+
+/**
+ * Generates a Bitcoin P2TR deposit address for a Sui address.
+ *
+ * Main entry point for the address derivation pipeline. Combines
+ * {@link deriveChildPubkey} and {@link twoOfTwoTaprootScriptPathAddress} into
+ * a single call. The produced address matches the Rust node's
+ * `bitcoin_utils::two_of_two_taproot_script_path_address` byte-for-byte.
+ *
+ * The address scheme is:
+ * ```text
+ * tr(NUMS, multi_a(2, guardian, derive(mpc_master, sui_address)))
+ * ```
+ *
+ * @returns bech32m-encoded P2TR deposit address (e.g. `tb1p…` for signet)
+ */
+export function generateDepositAddress({
+    mpcMasterCompressed,
+    guardianBtcXOnly,
+    suiAddress,
+    network,
+}: DepositAddressInputs): string {
+    const childXOnly = deriveChildPubkey(mpcMasterCompressed, suiAddress);
+    return twoOfTwoTaprootScriptPathAddress(guardianBtcXOnly, childXOnly, network);
 }
 
 // ---------------------------------------------------------------------------

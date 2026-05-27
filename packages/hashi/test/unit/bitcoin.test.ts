@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
     deriveChildPubkey,
     taprootScriptPathAddress,
+    twoOfTwoTaprootScriptPathAddress,
     generateDepositAddress,
     arkworksToSec1Compressed,
     bitcoinAddressToWitnessProgram,
@@ -13,14 +14,59 @@ import { bech32, bech32m } from "@scure/base";
 import { fromHex } from "@mysten/sui/utils";
 
 /**
- * Deterministic test key: secret key = 2 (matching TEST_HASHI_BTC_SK in bitcoin_utils.rs tests).
- * The compressed public key is derived from this scalar.
+ * Deterministic test key: secret key = 2 (small-scalar convenience, used for
+ * tests that just need *some* valid pubkey). For Rust-cross-language vectors
+ * we use the bytes-of-all-twos form below instead.
  */
 const TEST_SECRET_KEY = new Uint8Array(32);
 TEST_SECRET_KEY[31] = 2; // scalar = 2
 const TEST_COMPRESSED_KEY = secp256k1.getPublicKey(TEST_SECRET_KEY, true);
 
 const ZERO_ADDRESS = new Uint8Array(32); // 0x000…000
+
+// ---------------------------------------------------------------------------
+//  Rust-cross-language test fixtures
+// ---------------------------------------------------------------------------
+//
+// Mirrored byte-for-byte from
+// `crates/hashi-types/src/guardian/bitcoin_utils.rs` test
+// `cross_lang_2of2_test_vectors`. The Rust test uses
+//   TEST_ENCLAVE_BTC_SK = [1u8; 32]   → enclave/guardian keypair
+//   TEST_HASHI_BTC_SK   = [2u8; 32]   → MPC master keypair
+// and `keypair.x_only_public_key().0` returns the BIP-340 even-y x-coordinate.
+// To match that on the TS side, we feed the same secret bytes to noble's
+// `getPublicKey(..., true)` and take only the x-coordinate (bytes [1..33]),
+// dropping the parity prefix; that is the form the on-chain bridge stores.
+
+const RUST_ENCLAVE_SK = new Uint8Array(32).fill(1);
+const RUST_HASHI_SK = new Uint8Array(32).fill(2);
+
+/** 32-byte BIP-340 x-only guardian/enclave public key. */
+const RUST_GUARDIAN_X_ONLY = secp256k1.getPublicKey(RUST_ENCLAVE_SK, true).slice(1);
+
+/**
+ * 33-byte SEC1 compressed MPC master key with the even-y prefix forced to
+ * 0x02. The Rust bridge converts the on-chain pubkey to `XOnlyPublicKey` via
+ * `SchnorrPublicKey::try_from(..)`, which always picks the even-y lift; the
+ * TS `deriveChildPubkey` preserves whatever parity is in the SEC1 prefix, so
+ * forcing 0x02 here makes the cross-language derivation match.
+ */
+const RUST_HASHI_MASTER_SEC1_EVEN_Y = (() => {
+    const natural = secp256k1.getPublicKey(RUST_HASHI_SK, true);
+    const evenY = new Uint8Array(33);
+    evenY[0] = 0x02;
+    evenY.set(natural.slice(1), 1);
+    return evenY;
+})();
+
+const RUST_PATH_ZERO = new Uint8Array(32);
+const RUST_PATH_ONES = new Uint8Array(32).fill(1);
+const RUST_PATH_AB_CD = (() => {
+    const p = new Uint8Array(32);
+    p[0] = 0xab;
+    p[31] = 0xcd;
+    return p;
+})();
 
 describe("deriveChildPubkey", () => {
     it("returns a 32-byte x-only key", () => {
@@ -127,15 +173,71 @@ describe("taprootScriptPathAddress", () => {
     });
 });
 
+describe("twoOfTwoTaprootScriptPathAddress", () => {
+    // Use two distinct x-only inputs derived from the Rust-matching secrets.
+    // Both are guaranteed-on-curve (they're outputs of `getPublicKey(...)`).
+    const guardian = RUST_GUARDIAN_X_ONLY;
+    const childKey = deriveChildPubkey(RUST_HASHI_MASTER_SEC1_EVEN_Y, ZERO_ADDRESS);
+
+    it("returns a bech32m address with correct prefix per network", () => {
+        expect(twoOfTwoTaprootScriptPathAddress(guardian, childKey, "mainnet")).toMatch(/^bc1p/);
+        expect(twoOfTwoTaprootScriptPathAddress(guardian, childKey, "testnet")).toMatch(/^tb1p/);
+        expect(twoOfTwoTaprootScriptPathAddress(guardian, childKey, "signet")).toMatch(/^tb1p/);
+        expect(twoOfTwoTaprootScriptPathAddress(guardian, childKey, "regtest")).toMatch(/^bcrt1p/);
+    });
+
+    it("is deterministic", () => {
+        const a = twoOfTwoTaprootScriptPathAddress(guardian, childKey, "testnet");
+        const b = twoOfTwoTaprootScriptPathAddress(guardian, childKey, "testnet");
+        expect(a).toBe(b);
+    });
+
+    it("differs when guardian and MPC-child arguments are swapped", () => {
+        // The Rust descriptor is `tr(NUMS, multi_a(2, enclave, derived_hashi))` —
+        // miniscript does NOT auto-sort keys. Swapping the two arguments must
+        // produce a different address, otherwise we've accidentally introduced
+        // canonical sorting and the SDK would silently diverge from the bridge.
+        const a = twoOfTwoTaprootScriptPathAddress(guardian, childKey, "regtest");
+        const b = twoOfTwoTaprootScriptPathAddress(childKey, guardian, "regtest");
+        expect(a).not.toBe(b);
+    });
+
+    it("rejects non-32-byte inputs", () => {
+        expect(() =>
+            twoOfTwoTaprootScriptPathAddress(new Uint8Array(31), childKey, "testnet"),
+        ).toThrow("32-byte");
+        expect(() =>
+            twoOfTwoTaprootScriptPathAddress(guardian, new Uint8Array(33), "testnet"),
+        ).toThrow("32-byte");
+    });
+
+    // Cross-language vector — Rust ground truth. Values captured from
+    // `cargo nextest run -p hashi-types cross_lang_2of2_test_vectors`.
+    it("matches Rust vector (regtest, path = zero)", () => {
+        const btcAddress = twoOfTwoTaprootScriptPathAddress(
+            RUST_GUARDIAN_X_ONLY,
+            fromHex("0x80583e4abd7e73b0868a44e24dd05379375f1c3a85c4c1329bb0572df8577985"),
+            "regtest",
+        );
+        expect(btcAddress).toBe(
+            "bcrt1p0y0fqatuhy4rwt5ac99z7wse6u8zqzu73jmk0rls57uulnl7q4mq0pk06r",
+        );
+    });
+});
+
 describe("generateDepositAddress", () => {
     it("produces a valid P2TR address end-to-end", () => {
-        const addr = new Uint8Array(32);
-        addr[31] = 0x42;
+        const suiAddr = new Uint8Array(32);
+        suiAddr[31] = 0x42;
 
-        const btcAddress = generateDepositAddress(TEST_COMPRESSED_KEY, addr, "regtest");
+        const btcAddress = generateDepositAddress({
+            mpcMasterCompressed: TEST_COMPRESSED_KEY,
+            guardianBtcXOnly: RUST_GUARDIAN_X_ONLY,
+            suiAddress: suiAddr,
+            network: "regtest",
+        });
 
         expect(btcAddress).toMatch(/^bcrt1p/);
-        // P2TR bech32m addresses are 62 chars for mainnet, longer for regtest
         expect(btcAddress.length).toBeGreaterThan(40);
     });
 
@@ -143,51 +245,77 @@ describe("generateDepositAddress", () => {
         const suiAddr = new Uint8Array(32);
         suiAddr[0] = 0xab;
 
-        const composed = generateDepositAddress(TEST_COMPRESSED_KEY, suiAddr, "testnet");
+        const composed = generateDepositAddress({
+            mpcMasterCompressed: TEST_COMPRESSED_KEY,
+            guardianBtcXOnly: RUST_GUARDIAN_X_ONLY,
+            suiAddress: suiAddr,
+            network: "testnet",
+        });
 
         const child = deriveChildPubkey(TEST_COMPRESSED_KEY, suiAddr);
-        const manual = taprootScriptPathAddress(child, "testnet");
+        const manual = twoOfTwoTaprootScriptPathAddress(RUST_GUARDIAN_X_ONLY, child, "testnet");
 
         expect(composed).toBe(manual);
     });
 
     /**
-     * Cross-language test vectors using the same constants as the Rust tests
-     * in `hashi-types/src/guardian/bitcoin_utils.rs`:
-     *   TEST_HASHI_BTC_SK = [2u8; 32]  (secret scalar = 2)
-     *
-     * These vectors should be added to the Rust test suite as well so that
-     * both implementations assert the same expected addresses.
+     * Cross-language test vectors captured byte-for-byte from
+     * `cargo nextest run -p hashi-types cross_lang_2of2_test_vectors`. Both
+     * sides MUST produce the same `(derived_mpc, address)` for the same
+     * `(enclave/guardian_x, hashi_master_x, path)` triple — any drift between
+     * the SDK and the Rust bridge silently sends user funds to addresses the
+     * validator rejects.
      */
-    it("matches cross-language vector: secret=2, zero address, regtest", () => {
-        const btcAddress = generateDepositAddress(TEST_COMPRESSED_KEY, ZERO_ADDRESS, "regtest");
-        expect(btcAddress).toBe("bcrt1phljz7xzha5m52dudgkrd3z3lly8287wyspgazmd8zktrvvz07n6q37kevt");
-    });
+    it.each([
+        {
+            label: "path = zero",
+            path: RUST_PATH_ZERO,
+            expectedDerivedHex:
+                "80583e4abd7e73b0868a44e24dd05379375f1c3a85c4c1329bb0572df8577985",
+            expectedRegtest:
+                "bcrt1p0y0fqatuhy4rwt5ac99z7wse6u8zqzu73jmk0rls57uulnl7q4mq0pk06r",
+            expectedSignet: "tb1p0y0fqatuhy4rwt5ac99z7wse6u8zqzu73jmk0rls57uulnl7q4mqzcuf0e",
+        },
+        {
+            label: "path = [1u8; 32]",
+            path: RUST_PATH_ONES,
+            expectedDerivedHex:
+                "1b79f716fb1f7beba697f012edcf7b81a96ceac2920b181bd217c9cc017ac7fb",
+            expectedRegtest:
+                "bcrt1pftf88nkuljl4rlsd4xqyq7sy0fzjedws5egf7nuyq4lkkj3hdz2sdfq4a0",
+            expectedSignet: "tb1pftf88nkuljl4rlsd4xqyq7sy0fzjedws5egf7nuyq4lkkj3hdz2sqs2ng4",
+        },
+        {
+            label: "path = 0xab..00..cd",
+            path: RUST_PATH_AB_CD,
+            expectedDerivedHex:
+                "1403322badfd7823bebf81e9c5ff74f32f856348ac0f5abe33130cc4b6a14c84",
+            expectedRegtest:
+                "bcrt1pe82wsztzxt97jwkx6wcls257xaycfxw7up4k0ju7r6rsf07zxdlsyg9dfv",
+            expectedSignet: "tb1pe82wsztzxt97jwkx6wcls257xaycfxw7up4k0ju7r6rsf07zxdlsf30tuk",
+        },
+    ])(
+        "matches Rust cross-language vector: $label",
+        ({ path, expectedDerivedHex, expectedRegtest, expectedSignet }) => {
+            // Derived child x-only key matches Rust's get_derived_pubkey output.
+            const derived = deriveChildPubkey(RUST_HASHI_MASTER_SEC1_EVEN_Y, path);
+            expect(Buffer.from(derived).toString("hex")).toBe(expectedDerivedHex);
 
-    it("matches cross-language vector: secret=2, address=0x01, regtest", () => {
-        const addr = new Uint8Array(32);
-        addr[31] = 1;
-        const btcAddress = generateDepositAddress(TEST_COMPRESSED_KEY, addr, "regtest");
-        expect(btcAddress).toBe("bcrt1phgk8napk468tyq07t4m834gk80yhz0yrw7z8qcfqcc0pzfcm44jseq66p8");
-    });
-
-    it("matches a known reference vector", () => {
-        // 33-byte arkworks-compressed MPC master public key (from devnet CommitteeSet.mpc_public_key).
-        const MPC_MASTER_KEY_HEX =
-            "0x466d7e0035ec8c4b3056d28c9faab29228a89332a12dec1a6a68aaa5669d9e0380";
-        const SUI_ADDRESS_HEX =
-            "0xe40c8cf8b53822829b3a6dc9aea84b62653f60b771e9da4bd4e214cae851b87b";
-        const EXPECTED_BTC_ADDRESS =
-            "tb1pcftamwsj3yehmpq7zpkchp40qqk7ecfjr2d3jl8ptne52erfc7squm4rw2";
-        const NETWORK = "signet" as const;
-
-        const mpcKey = arkworksToSec1Compressed(fromHex(MPC_MASTER_KEY_HEX));
-        const suiAddress = fromHex(SUI_ADDRESS_HEX);
-
-        const btcAddress = generateDepositAddress(mpcKey, suiAddress, NETWORK);
-
-        expect(btcAddress).toBe(EXPECTED_BTC_ADDRESS);
-    });
+            // Final 2-of-2 addresses match for both regtest and signet.
+            for (const [network, expected] of [
+                ["regtest", expectedRegtest],
+                ["signet", expectedSignet],
+            ] as const) {
+                const btcAddress = generateDepositAddress({
+                    mpcMasterCompressed: RUST_HASHI_MASTER_SEC1_EVEN_Y,
+                    guardianBtcXOnly: RUST_GUARDIAN_X_ONLY,
+                    suiAddress: path,
+                    network,
+                });
+                expect(btcAddress).toBe(expected);
+            }
+        },
+    );
 });
 
 describe("bitcoinAddressToWitnessProgram", () => {

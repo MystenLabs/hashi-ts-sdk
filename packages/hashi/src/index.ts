@@ -14,8 +14,10 @@ export {
     deriveChildPubkey,
     generateDepositAddress,
     taprootScriptPathAddress,
+    twoOfTwoTaprootScriptPathAddress,
     witnessProgramToAddress,
 } from "./bitcoin.js";
+export type { DepositAddressInputs } from "./bitcoin.js";
 export type {
     BitcoinNetwork,
     CancelWithdrawalParams,

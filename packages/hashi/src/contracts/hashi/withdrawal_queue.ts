@@ -87,7 +87,17 @@ export const WithdrawalTransaction = new MoveStruct({
         change_output: bcs.option(OutputUtxo),
         timestamp_ms: bcs.u64(),
         randomness: bcs.vector(bcs.u8()),
+        /**
+         * Per-input Schnorr signatures from the MPC committee. Populated by
+         * `sign_withdrawal` once both the MPC and the guardian have signed.
+         */
         signatures: bcs.option(bcs.vector(bcs.vector(bcs.u8()))),
+        /**
+         * Per-input Schnorr signatures from the guardian enclave. Same length as
+         * `signatures`; together they form the 2-of-2 taproot witness. Populated by
+         * `sign_withdrawal` alongside `signatures`.
+         */
+        guardian_signatures: bcs.option(bcs.vector(bcs.vector(bcs.u8()))),
         /**
          * Global presignature start index assigned at construction time. Input `i` uses
          * presig at index `presig_start_index + i`.
@@ -138,7 +148,22 @@ export const WithdrawalSignedEvent = new MoveStruct({
     fields: {
         withdrawal_txn_id: bcs.Address,
         request_ids: bcs.vector(bcs.Address),
+        /** Per-input Schnorr signatures from the MPC committee. */
         signatures: bcs.vector(bcs.vector(bcs.u8())),
+        /**
+         * Per-input Schnorr signatures from the guardian enclave. Same length as
+         * `signatures`; the watcher pairs index `i` of both to form the witness for input
+         * `i` at broadcast time.
+         */
+        guardian_signatures: bcs.vector(bcs.vector(bcs.u8())),
+    },
+});
+export const WithdrawalPresigsReassignedEvent = new MoveStruct({
+    name: `${$moduleName}::WithdrawalPresigsReassignedEvent`,
+    fields: {
+        withdrawal_txn_id: bcs.Address,
+        epoch: bcs.u64(),
+        presig_start_index: bcs.u64(),
     },
 });
 export const WithdrawalConfirmedEvent = new MoveStruct({

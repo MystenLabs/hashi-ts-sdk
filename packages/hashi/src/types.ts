@@ -31,6 +31,11 @@ export interface HashiClientOptions<Name = "HashiClient"> {
  * state. `depositMinimum` is a Move-side alias of `bitcoinDepositMinimum`;
  * `worstCaseNetworkFee` is derived as `bitcoinWithdrawalMinimum - 546` (the
  * dust relay floor) and is always ≥ 1.
+ *
+ * The three `guardian*` fields are `null` on deployments where the guardian
+ * config hasn't been written yet (pre-feature chains or in-flight rollouts).
+ * `guardianBtcPublicKey` is required for {@link HashiClient.generateDepositAddress}
+ * to succeed.
  */
 export interface GovernanceConfig {
     readonly paused: boolean;
@@ -42,6 +47,19 @@ export interface GovernanceConfig {
     readonly bitcoinDepositTimeDelayMs: bigint;
     readonly depositMinimum: bigint;
     readonly worstCaseNetworkFee: bigint;
+    /** Guardian gRPC/HTTP endpoint from on-chain config. `null` if unset. */
+    readonly guardianUrl: string | null;
+    /**
+     * Guardian's Ed25519 attestation key (32 bytes), used to verify signed
+     * `GetGuardianInfo` responses. `null` if unset.
+     */
+    readonly guardianPublicKey: Uint8Array | null;
+    /**
+     * Guardian's BIP-340 x-only secp256k1 BTC public key (32 bytes), the
+     * `pk1` slot of the on-chain 2-of-2 deposit-address descriptor. `null`
+     * if unset (deposit-address derivation will fail).
+     */
+    readonly guardianBtcPublicKey: Uint8Array | null;
 }
 
 /**

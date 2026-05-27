@@ -34,6 +34,11 @@ export interface FinishPublishArguments {
     self: RawTransactionArgument<string>;
     upgradeCap: RawTransactionArgument<string>;
     bitcoinChainId: RawTransactionArgument<string>;
+    guardianUrl: RawTransactionArgument<string>;
+    guardianPublicKey: RawTransactionArgument<number[]>;
+    guardianBtcPublicKey: RawTransactionArgument<number[]>;
+    bitcoinConfirmationThreshold: RawTransactionArgument<number | bigint | null>;
+    bitcoinDepositTimeDelayMs: RawTransactionArgument<number | bigint | null>;
     coinRegistry: RawTransactionArgument<string>;
 }
 export interface FinishPublishOptions {
@@ -44,13 +49,38 @@ export interface FinishPublishOptions {
               self: RawTransactionArgument<string>,
               upgradeCap: RawTransactionArgument<string>,
               bitcoinChainId: RawTransactionArgument<string>,
+              guardianUrl: RawTransactionArgument<string>,
+              guardianPublicKey: RawTransactionArgument<number[]>,
+              guardianBtcPublicKey: RawTransactionArgument<number[]>,
+              bitcoinConfirmationThreshold: RawTransactionArgument<number | bigint | null>,
+              bitcoinDepositTimeDelayMs: RawTransactionArgument<number | bigint | null>,
               coinRegistry: RawTransactionArgument<string>,
           ];
 }
 export function finishPublish(options: FinishPublishOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, null, "address", null] satisfies (string | null)[];
-    const parameterNames = ["self", "upgradeCap", "bitcoinChainId", "coinRegistry"];
+    const argumentsTypes = [
+        null,
+        null,
+        "address",
+        "0x1::string::String",
+        "vector<u8>",
+        "vector<u8>",
+        "0x1::option::Option<u64>",
+        "0x1::option::Option<u64>",
+        null,
+    ] satisfies (string | null)[];
+    const parameterNames = [
+        "self",
+        "upgradeCap",
+        "bitcoinChainId",
+        "guardianUrl",
+        "guardianPublicKey",
+        "guardianBtcPublicKey",
+        "bitcoinConfirmationThreshold",
+        "bitcoinDepositTimeDelayMs",
+        "coinRegistry",
+    ];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,

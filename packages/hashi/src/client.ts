@@ -19,6 +19,7 @@ import {
     arkworksToSec1Compressed,
     bitcoinAddressToWitnessProgram,
 } from "./bitcoin.js";
+import { GUARDIAN_BTC_PUBLIC_KEY_LEN, GUARDIAN_PUBLIC_KEY_LEN } from "./constants.js";
 import { DUST_RELAY_MIN_VALUE, NETWORK_CONFIG } from "./constants.js";
 import type { AmountViolation } from "./errors.js";
 import {
@@ -177,8 +178,20 @@ export class HashiClient {
     /**
      * Generates a unique Bitcoin P2TR deposit address for a Sui address.
      *
-     * Fetches the MPC committee public key from on-chain, derives a child key
-     * using the Sui address, and builds a taproot script-path address.
+     * Fetches the MPC committee public key and the guardian's BTC public key
+     * from on-chain, derives an MPC child key against the Sui address, and
+     * builds a 2-of-2 taproot script-path address
+     * (`tr(NUMS, multi_a(2, guardian, derived_mpc))`). The address matches
+     * the bridge's on-chain `validate_deposit_request_derivation_path` check
+     * byte-for-byte.
+     *
+     * Both reads happen via the same `Hashi.get` round-trip (the MPC key
+     * comes from `committee_set.mpc_public_key`; the guardian key from
+     * `config.config["guardian_btc_public_key"]`).
+     *
+     * Throws `HashiConfigError` if the deployment isn't guardian-provisioned
+     * yet (no `guardian_btc_public_key` on chain). The SDK refuses to fall
+     * back to a single-key address because the bridge validator rejects it.
      *
      * @example
      * ```ts
@@ -196,9 +209,16 @@ export class HashiClient {
         /** Override the default Bitcoin network for this call. */
         bitcoinNetwork?: BitcoinNetwork;
     }): Promise<string> {
-        const mpcKey = await this.view.mpcPublicKey();
-        const addressBytes = fromHex(suiAddress);
-        return generateDepositAddressRaw(mpcKey, addressBytes, bitcoinNetwork);
+        const [mpcKey, snap] = await Promise.all([this.view.mpcPublicKey(), this.view.all()]);
+        if (!snap.guardianBtcPublicKey) {
+            throw HashiConfigError.missing("guardian_btc_public_key", "Bytes");
+        }
+        return generateDepositAddressRaw({
+            mpcMasterCompressed: mpcKey,
+            guardianBtcXOnly: snap.guardianBtcPublicKey,
+            suiAddress: fromHex(suiAddress),
+            network: bitcoinNetwork,
+        });
     }
 
     /**
@@ -595,6 +615,39 @@ export class HashiClient {
         };
         const bool = (key: string): boolean => entry(contents, key, "Bool").Bool;
         const addr = (key: string): string => entry(contents, key, "Address").Address;
+        // Guardian keys are optional today — pre-feature deployments don't
+        // have them at all. We surface `null` for missing entries; downstream
+        // callers (e.g. `generateDepositAddress`) hard-fail when they need a
+        // value but find `null`.
+        const optionalString = (key: string): string | null => {
+            try {
+                return entry(contents, key, "String").String;
+            } catch (e) {
+                if (e instanceof HashiConfigError && e.actualVariant === undefined) {
+                    return null;
+                }
+                throw e;
+            }
+        };
+        const optionalBytes = (key: string, expectedLen: number): Uint8Array | null => {
+            let v;
+            try {
+                v = entry(contents, key, "Bytes");
+            } catch (e) {
+                if (e instanceof HashiConfigError && e.actualVariant === undefined) {
+                    return null;
+                }
+                throw e;
+            }
+            if (v.Bytes.length !== expectedLen) {
+                throw HashiConfigError.malformedPayload(
+                    key,
+                    "Bytes",
+                    `expected ${expectedLen} bytes, got ${v.Bytes.length}`,
+                );
+            }
+            return new Uint8Array(v.Bytes);
+        };
 
         const rawDepositMin = u64("bitcoin_deposit_minimum");
         const rawWithdrawalMin = u64("bitcoin_withdrawal_minimum");
@@ -615,6 +668,12 @@ export class HashiClient {
             bitcoinDepositTimeDelayMs: u64("bitcoin_deposit_time_delay_ms"),
             depositMinimum: bitcoinDepositMinimum,
             worstCaseNetworkFee: bitcoinWithdrawalMinimum - DUST_RELAY_MIN_VALUE,
+            guardianUrl: optionalString("guardian_url"),
+            guardianPublicKey: optionalBytes("guardian_public_key", GUARDIAN_PUBLIC_KEY_LEN),
+            guardianBtcPublicKey: optionalBytes(
+                "guardian_btc_public_key",
+                GUARDIAN_BTC_PUBLIC_KEY_LEN,
+            ),
         };
     }
 
@@ -637,8 +696,9 @@ export class HashiClient {
             const mpcKey = new Uint8Array(result.json.committee_set.mpc_public_key);
 
             if (mpcKey.length === 0) {
-                throw new Error(
-                    "MPC public key not available on-chain. Has the committee completed DKG?",
+                throw HashiConfigError.missing(
+                    "committee_set.mpc_public_key",
+                    "Bytes",
                 );
             }
 
