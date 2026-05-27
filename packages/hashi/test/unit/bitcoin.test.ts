@@ -46,10 +46,15 @@ const RUST_GUARDIAN_X_ONLY = secp256k1.getPublicKey(RUST_ENCLAVE_SK, true).slice
 
 /**
  * 33-byte SEC1 compressed MPC master key with the even-y prefix forced to
- * 0x02. The Rust bridge converts the on-chain pubkey to `XOnlyPublicKey` via
- * `SchnorrPublicKey::try_from(..)`, which always picks the even-y lift; the
- * TS `deriveChildPubkey` preserves whatever parity is in the SEC1 prefix, so
- * forcing 0x02 here makes the cross-language derivation match.
+ * 0x02. The matching Rust `cross_lang_2of2_test_vectors` test uses
+ * `hashi_master_g_from_xonly` which calls `G::with_even_y_from_x_be_bytes`
+ * to reconstruct the parent with even-y parity from the x-only bytes. The
+ * TS `deriveChildPubkey` preserves whatever parity is in the SEC1 prefix,
+ * so hard-coding `0x02` here keeps the derivations byte-identical.
+ *
+ * The companion `RUST_HASHI_MASTER_SEC1_NATURAL_ODD_Y` (below) exercises
+ * the **odd-y** path — the actual bug class that `derive_hashi_child_pubkey`
+ * fixed for production DKG outputs.
  */
 const RUST_HASHI_MASTER_SEC1_EVEN_Y = (() => {
     const natural = secp256k1.getPublicKey(RUST_HASHI_SK, true);
@@ -58,6 +63,15 @@ const RUST_HASHI_MASTER_SEC1_EVEN_Y = (() => {
     evenY.set(natural.slice(1), 1);
     return evenY;
 })();
+
+/**
+ * Seed for the odd-y cross-language vector. `[4u8; 32]` is the first scalar
+ * in `3..=255` whose `s · G` lands on odd y on secp256k1 — verified on the
+ * Rust side by `cross_lang_2of2_test_vectors_odd_y`. Both sides use the
+ * **natural** SEC1 form (`0x03` prefix); no parity forcing.
+ */
+const RUST_HASHI_SK_ODD_Y = new Uint8Array(32).fill(4);
+const RUST_HASHI_MASTER_SEC1_NATURAL_ODD_Y = secp256k1.getPublicKey(RUST_HASHI_SK_ODD_Y, true);
 
 const RUST_PATH_ZERO = new Uint8Array(32);
 const RUST_PATH_ONES = new Uint8Array(32).fill(1);
@@ -297,7 +311,7 @@ describe("generateDepositAddress", () => {
     ])(
         "matches Rust cross-language vector: $label",
         ({ path, expectedDerivedHex, expectedRegtest, expectedSignet }) => {
-            // Derived child x-only key matches Rust's get_derived_pubkey output.
+            // Derived child x-only key matches Rust's derive_hashi_child_pubkey output.
             const derived = deriveChildPubkey(RUST_HASHI_MASTER_SEC1_EVEN_Y, path);
             expect(Buffer.from(derived).toString("hex")).toBe(expectedDerivedHex);
 
@@ -316,6 +330,63 @@ describe("generateDepositAddress", () => {
             }
         },
     );
+
+    /**
+     * Cross-language **odd-y** vector. Captured byte-for-byte from
+     * `cargo nextest run -p hashi-types cross_lang_2of2_test_vectors_odd_y`.
+     *
+     * The even-y vectors above force `0x02` on both sides, so they only
+     * exercise the path that worked before PR #609. This test pins the path
+     * that PR #609 actually fixed — for an odd-y master, the legacy code
+     * built the descriptor against the even-y projection but the MPC signed
+     * against raw `G`, so Bitcoin rejected the witness for ~50% of DKG
+     * outputs. Both sides now use the natural SEC1 prefix (`0x03`) here.
+     */
+    it("matches Rust cross-language vector: odd-y master, path = [1u8; 32]", () => {
+        // Lock the property under test: secp256k1's 4·G has odd y. If this
+        // assertion ever fires, the upstream curve impl changed and the
+        // pinned vectors below must be regenerated.
+        expect(RUST_HASHI_MASTER_SEC1_NATURAL_ODD_Y[0]).toBe(0x03);
+
+        // Full production path: the bridge stores `bcs::to_bytes(&G)` (arkworks
+        // LE-x ‖ flag) on-chain; `view.mpcPublicKey()` runs these exact bytes
+        // through `arkworksToSec1Compressed`. Pin the odd-y master's on-chain
+        // bytes (captured from `bcs::to_bytes(&(G::generator() * [4u8;32]))`)
+        // and assert the conversion recovers the natural `0x03` SEC1 form. This
+        // ties the arkworks→SEC1 step into the cross-language guarantee — the
+        // arkworks "y > (p-1)/2" flag and the SEC1 parity prefix are different
+        // conventions, so odd-y is exactly where a naive copy would break.
+        const onchainArkworksOddY = fromHex(
+            "0x0b5be51c72b8b5ef30e0e493a5c7e1102f5f08711a7514465139ad4aad79274600",
+        );
+        expect(Buffer.from(arkworksToSec1Compressed(onchainArkworksOddY)).toString("hex")).toBe(
+            Buffer.from(RUST_HASHI_MASTER_SEC1_NATURAL_ODD_Y).toString("hex"),
+        );
+
+        const path = RUST_PATH_ONES;
+        const expectedDerivedHex =
+            "d6305db510d6cb87554c942aaaffa3ff277366c2a04b8e64f633cceebd05f937";
+        const expectedRegtest =
+            "bcrt1pcpxn30jztmndchw204yr2hjzpy6eqq3k8lauehq2nf2wduu3yzcs2uprtq";
+        const expectedSignet =
+            "tb1pcpxn30jztmndchw204yr2hjzpy6eqq3k8lauehq2nf2wduu3yzcs89t976";
+
+        const derived = deriveChildPubkey(RUST_HASHI_MASTER_SEC1_NATURAL_ODD_Y, path);
+        expect(Buffer.from(derived).toString("hex")).toBe(expectedDerivedHex);
+
+        for (const [network, expected] of [
+            ["regtest", expectedRegtest],
+            ["signet", expectedSignet],
+        ] as const) {
+            const btcAddress = generateDepositAddress({
+                mpcMasterCompressed: RUST_HASHI_MASTER_SEC1_NATURAL_ODD_Y,
+                guardianBtcXOnly: RUST_GUARDIAN_X_ONLY,
+                suiAddress: path,
+                network,
+            });
+            expect(btcAddress).toBe(expected);
+        }
+    });
 });
 
 describe("bitcoinAddressToWitnessProgram", () => {
