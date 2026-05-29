@@ -199,62 +199,6 @@ export function deriveChildPubkey(
 }
 
 /**
- * Builds a P2TR script-path-only address: `tr(NUMS, pk(pubkey))`.
- *
- * A BIP-341 taproot output has two spending paths: the *key path* (spend with
- * the internal key) and the *script path* (reveal and satisfy a script in the
- * Merkle tree). By using the NUMS (Nothing-Up-My-Sleeve) point as the internal
- * key — a point with no known discrete logarithm — the key path is provably
- * unspendable, forcing every spend through the script path.
- *
- * The script tree contains a single leaf: `<pubkey> OP_CHECKSIG`, meaning the
- * MPC committee must produce a valid Schnorr signature for `pubkey` to spend
- * the output. This is how the committee authorises withdrawals.
- *
- * The taproot output key is computed per BIP-341:
- * ```text
- * leafHash   = tagged_hash("TapLeaf",   0xC0 ‖ compact_size(script) ‖ script)
- * tweak      = tagged_hash("TapTweak",  NUMS ‖ leafHash)
- * outputKey  = NUMS + tweak × G
- * ```
- *
- * The resulting output key is encoded as a SegWit v1 witness program in a
- * bech32m address.
- *
- * @param pubkey - 32-byte x-only public key for the script leaf
- * @param network - Bitcoin network for the bech32m human-readable prefix
- * @returns bech32m-encoded P2TR address (e.g. `bc1p…`, `tb1p…`, `bcrt1p…`)
- */
-export function taprootScriptPathAddress(pubkey: Uint8Array, network: BitcoinNetwork): string {
-    if (pubkey.length !== 32) {
-        throw new Error(`Expected 32-byte x-only pubkey, got ${pubkey.length}`);
-    }
-
-    // Tapscript: OP_PUSHBYTES_32 <pubkey> OP_CHECKSIG
-    const tapscript = new Uint8Array(34);
-    tapscript[0] = 0x20; // OP_PUSHBYTES_32
-    tapscript.set(pubkey, 1);
-    tapscript[33] = 0xac; // OP_CHECKSIG
-
-    // Leaf hash (BIP-341): tagged_hash("TapLeaf", leaf_version ‖ compact_size(len) ‖ script)
-    const leafPrefix = new Uint8Array([0xc0, tapscript.length]); // v0xC0, len=34
-    const leafHash = taggedHash("TapLeaf", leafPrefix, tapscript);
-
-    // Tweak (BIP-341): tagged_hash("TapTweak", internal_key ‖ merkle_root)
-    // With a single leaf, the merkle root IS the leaf hash.
-    const tweak = taggedHash("TapTweak", NUMS_KEY, leafHash);
-    const tweakScalar = bytesToNumberBE(tweak) % CURVE_ORDER;
-
-    // Output key = NUMS + tweak × G
-    const outputPoint = NUMS_POINT.add(Point.BASE.multiply(tweakScalar));
-    const outputKey = outputPoint.toBytes(true).slice(1); // 32-byte x-only
-
-    // bech32m: witness version 1 ‖ witness program
-    const words = [1, ...bech32m.toWords(outputKey)];
-    return bech32m.encode(NETWORK_HRP[network], words);
-}
-
-/**
  * Builds a 2-of-2 P2TR script-path-only address:
  * `tr(NUMS, multi_a(2, guardian, derived_mpc))`.
  *

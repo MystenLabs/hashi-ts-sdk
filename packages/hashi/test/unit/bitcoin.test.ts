@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
     deriveChildPubkey,
-    taprootScriptPathAddress,
     twoOfTwoTaprootScriptPathAddress,
     generateDepositAddress,
     arkworksToSec1Compressed,
@@ -156,34 +155,6 @@ describe("arkworksToSec1Compressed", () => {
 
     it("throws for wrong length", () => {
         expect(() => arkworksToSec1Compressed(new Uint8Array(32))).toThrow("33-byte");
-    });
-});
-
-describe("taprootScriptPathAddress", () => {
-    // Use the derived child key as input
-    const childKey = deriveChildPubkey(TEST_COMPRESSED_KEY, ZERO_ADDRESS);
-
-    it("returns a bech32m address with correct prefix", () => {
-        expect(taprootScriptPathAddress(childKey, "mainnet")).toMatch(/^bc1p/);
-        expect(taprootScriptPathAddress(childKey, "testnet")).toMatch(/^tb1p/);
-        expect(taprootScriptPathAddress(childKey, "signet")).toMatch(/^tb1p/);
-        expect(taprootScriptPathAddress(childKey, "regtest")).toMatch(/^bcrt1p/);
-    });
-
-    it("is deterministic", () => {
-        const a = taprootScriptPathAddress(childKey, "testnet");
-        const b = taprootScriptPathAddress(childKey, "testnet");
-        expect(a).toBe(b);
-    });
-
-    it("produces different addresses for different keys", () => {
-        const addr1 = new Uint8Array(32);
-        addr1[31] = 1;
-        const otherChild = deriveChildPubkey(TEST_COMPRESSED_KEY, addr1);
-
-        const a = taprootScriptPathAddress(childKey, "testnet");
-        const b = taprootScriptPathAddress(otherChild, "testnet");
-        expect(a).not.toBe(b);
     });
 });
 

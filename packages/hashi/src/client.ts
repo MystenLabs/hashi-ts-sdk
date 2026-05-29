@@ -19,8 +19,12 @@ import {
     arkworksToSec1Compressed,
     bitcoinAddressToWitnessProgram,
 } from "./bitcoin.js";
-import { GUARDIAN_BTC_PUBLIC_KEY_LEN, GUARDIAN_PUBLIC_KEY_LEN } from "./constants.js";
-import { DUST_RELAY_MIN_VALUE, NETWORK_CONFIG } from "./constants.js";
+import {
+    DUST_RELAY_MIN_VALUE,
+    GUARDIAN_BTC_PUBLIC_KEY_LEN,
+    GUARDIAN_PUBLIC_KEY_LEN,
+    NETWORK_CONFIG,
+} from "./constants.js";
 import type { AmountViolation } from "./errors.js";
 import {
     AmountBelowMinimumError,
@@ -185,9 +189,8 @@ export class HashiClient {
      * the bridge's on-chain `validate_deposit_request_derivation_path` check
      * byte-for-byte.
      *
-     * Both reads happen via the same `Hashi.get` round-trip (the MPC key
-     * comes from `committee_set.mpc_public_key`; the guardian key from
-     * `config.config["guardian_btc_public_key"]`).
+     * The MPC key (`committee_set.mpc_public_key`) and the guardian key
+     * (`config.config["guardian_btc_public_key"]`) are read in parallel.
      *
      * Throws `HashiConfigError` if the deployment isn't guardian-provisioned
      * yet (no `guardian_btc_public_key` on chain). The SDK refuses to fall

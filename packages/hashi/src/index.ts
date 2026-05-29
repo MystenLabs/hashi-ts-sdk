@@ -13,7 +13,6 @@ export {
     bitcoinAddressToWitnessProgram,
     deriveChildPubkey,
     generateDepositAddress,
-    taprootScriptPathAddress,
     twoOfTwoTaprootScriptPathAddress,
     witnessProgramToAddress,
 } from "./bitcoin.js";
