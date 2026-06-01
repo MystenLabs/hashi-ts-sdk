@@ -23,7 +23,7 @@ import { Transaction } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { bech32, bech32m } from "@scure/base";
-import { fromHex } from "@mysten/sui/utils";
+import { fromHex, normalizeSuiAddress } from "@mysten/sui/utils";
 
 const HASHI_OBJECT_ID = "0x0000000000000000000000000000000000000000000000000000000000000001";
 const PACKAGE_ID = "0x0000000000000000000000000000000000000000000000000000000000000002";
@@ -135,11 +135,10 @@ describe("HashiClient", () => {
 
     describe("generateDepositAddress", () => {
         /**
-         * Build a `Hashi.get()` mock with both the MPC arkworks key and a
-         * configurable governance config. The full `Hashi.get` is called once
-         * by `view.mpcPublicKey()` and once by `view.all()` (the new
-         * implementation parallelizes them) — use `mockResolvedValue` (not
-         * `Once`) so both reads see the same response.
+         * Build a `Hashi.get()` mock carrying both the MPC arkworks key and a
+         * configurable governance config. `generateDepositAddress` reads the
+         * committee key and the guardian key from a single `Hashi.get`; the
+         * mock is persistent so any incidental extra read still resolves.
          */
         function mockHashiWithMpcAndConfig(
             mpcArkworks: Uint8Array | number[],
@@ -222,14 +221,61 @@ describe("HashiClient", () => {
                 },
             ]);
 
-            // The malformed-length check runs inside `view.all()`, which the
-            // new `generateDepositAddress` triggers as part of its parallel read.
+            // generateDepositAddress reads guardian_btc_public_key directly
+            // via `configBytes`, which length-checks the entry.
             const err = await client.hashi
                 .generateDepositAddress({ suiAddress: TEST_SUI_ADDRESS })
                 .catch((e) => e);
             expect(err).toBeInstanceOf(HashiConfigError);
             expect((err as HashiConfigError).key).toBe("guardian_btc_public_key");
             expect(err.message).toMatch(/expected 32 bytes, got 20/);
+        });
+
+        it("reads the committee and guardian keys from a single Hashi.get", async () => {
+            const getSpy = vi.spyOn(Hashi, "get");
+            mockHashiWithMpcAndConfig(TEST_MPC_KEY_ARKWORKS, [
+                ...WELL_FORMED_CONFIG,
+                guardianBtcConfigEntry(),
+            ]);
+
+            await client.hashi.generateDepositAddress({ suiAddress: TEST_SUI_ADDRESS });
+
+            expect(getSpy).toHaveBeenCalledTimes(1);
+        });
+
+        it("ignores an unrelated malformed config entry (guardian_public_key)", async () => {
+            // The Ed25519 attestation key is never touched by address
+            // derivation, so a malformed one must not block it — only the MPC
+            // key and guardian_btc_public_key are parsed.
+            mockHashiWithMpcAndConfig(TEST_MPC_KEY_ARKWORKS, [
+                ...WELL_FORMED_CONFIG,
+                guardianBtcConfigEntry(),
+                {
+                    key: "guardian_public_key",
+                    value: { $kind: "Bytes", Bytes: Array.from(new Uint8Array(20)) }, // wrong length
+                },
+            ]);
+
+            const btcAddress = await client.hashi.generateDepositAddress({
+                suiAddress: TEST_SUI_ADDRESS,
+            });
+            expect(btcAddress).toMatch(/^bcrt1p/);
+        });
+
+        it("normalizes a short-form Sui address before deriving", async () => {
+            mockHashiWithMpcAndConfig(TEST_MPC_KEY_ARKWORKS, [
+                ...WELL_FORMED_CONFIG,
+                guardianBtcConfigEntry(),
+            ]);
+
+            const fromShort = await client.hashi.generateDepositAddress({ suiAddress: "0x42" });
+            const expected = generateDepositAddress({
+                mpcMasterCompressed: TEST_MPC_KEY,
+                guardianBtcXOnly: TEST_GUARDIAN_BTC_X_ONLY,
+                suiAddress: fromHex(normalizeSuiAddress("0x42")),
+                network: "regtest",
+            });
+            expect(fromShort).toBe(expected);
         });
 
         it.todo(
@@ -1386,6 +1432,7 @@ describe("HashiClient", () => {
                             timestamp_ms: "3000",
                             randomness: [],
                             signatures: null,
+                            guardian_signatures: null,
                             presig_start_index: "0",
                             epoch: "1",
                         }).toBytes(),

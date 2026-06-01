@@ -35,7 +35,7 @@ This repo is a pnpm workspace. The SDK lives in `packages/hashi/` so it can be l
   - `constants.ts` — `NETWORK_CONFIG` (Hashi object/package ids and default BTC network per Sui network)
   - `errors.ts` — typed SDK errors (`HashiConfigError`, `HashiFetchError`, `HashiPausedError`, `AmountBelowMinimumError`, `InvalidParamsError`, `InvalidBitcoinAddressError`)
   - `types.ts` — public types (`DepositParams`, `WithdrawalParams`, `CancelWithdrawalParams`, `UtxoOutput`, `UtxoId`, `UtxoUsageResult`, `TransactionHistoryItem`, `DepositHistoryItem`, `WithdrawalHistoryItem`, `WithdrawalStatus`, `GovernanceConfig`, network/option shapes)
-  - `util.ts` — internal helpers (`assertHex32` hex validation, `entry` for VecMap decoding, `reverseTxidBytes`)
+  - `util.ts` — internal helpers (`assertHex32` hex validation, `entry`/`configBytes` for VecMap decoding, `reverseTxidBytes`)
   - `index.ts` — public exports
   - `contracts/` — auto-generated Move bindings (`@mysten/codegen`); do not edit
 - `test/` — unit and integration tests (vitest)
@@ -78,11 +78,11 @@ Update `NETWORK_CONFIG` in `packages/hashi/src/constants.ts` when those network 
 
 ## Bitcoin Address Scheme
 
-Each Sui address maps to a unique P2TR (Pay-to-Taproot) Bitcoin deposit address. The derivation replicates `fastcrypto_tbls::threshold_schnorr::key_derivation::derive_verifying_key`:
+Each Sui address maps to a unique P2TR (Pay-to-Taproot) Bitcoin deposit address — a 2-of-2 taproot script-path output co-controlled by the MPC committee and the guardian. The MPC child-key derivation replicates `fastcrypto_tbls::threshold_schnorr::key_derivation::derive_verifying_key`:
 
-1. Read the MPC committee master key from on-chain (`CommitteeSet.mpc_public_key`, 33-byte compressed secp256k1)
+1. Read the MPC committee master key (`CommitteeSet.mpc_public_key`, 33-byte compressed secp256k1) and the guardian's x-only BTC key (`guardian_btc_public_key` config) from on-chain
 2. Derive child key: `HKDF-SHA3-256(ikm = parent_x ‖ sui_address, len=64) mod n` → `child = parent + tweak × G`
-3. Build taproot address: `tr(NUMS, pk(child))` (devnet) or `tr(NUMS, multi_a(2, guardian, child))` (mainnet — not yet implemented)
+3. Build taproot address: `tr(NUMS, multi_a(2, guardian, child))` — both the guardian and the MPC-derived child must Schnorr-sign to spend. Mandatory on every network (mirrors hashi#609); `generateDepositAddress` throws until the deployment publishes `guardian_btc_public_key`.
 
 See https://mystenlabs.github.io/hashi/design/address-scheme.html
 

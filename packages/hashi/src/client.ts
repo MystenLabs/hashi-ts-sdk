@@ -1,7 +1,7 @@
 import type { ClientWithCoreApi, SuiClientTypes } from "@mysten/sui/client";
 import type { Signer } from "@mysten/sui/cryptography";
 import { bcs, TypeTagSerializer } from "@mysten/sui/bcs";
-import { fromHex, deriveDynamicFieldID } from "@mysten/sui/utils";
+import { fromHex, deriveDynamicFieldID, normalizeSuiAddress } from "@mysten/sui/utils";
 import { base58 } from "@scure/base";
 import { Transaction, coinWithBalance } from "@mysten/sui/transactions";
 import { Hashi } from "./contracts/hashi/hashi.js";
@@ -61,7 +61,7 @@ import {
     lookupAllVouts,
     getTxConfirmations,
 } from "./btc-rpc.js";
-import { assertHex32, entry, reverseTxidBytes, type ConfigEntry } from "./util.js";
+import { assertHex32, configBytes, entry, reverseTxidBytes, type ConfigEntry } from "./util.js";
 
 /** ObjectBag dynamic field name type (Wrapper<address> for dynamic_object_field lookups). */
 const OBJECT_BAG_ADDRESS_TYPE =
@@ -190,7 +190,9 @@ export class HashiClient {
      * byte-for-byte.
      *
      * The MPC key (`committee_set.mpc_public_key`) and the guardian key
-     * (`config.config["guardian_btc_public_key"]`) are read in parallel.
+     * (`guardian_btc_public_key` config) come from a single fetch of the
+     * Hashi object, and only those two fields are parsed — an unrelated
+     * malformed config entry can't block deposit-address generation.
      *
      * Throws `HashiConfigError` if the deployment isn't guardian-provisioned
      * yet (no `guardian_btc_public_key` on chain). The SDK refuses to fall
@@ -212,14 +214,15 @@ export class HashiClient {
         /** Override the default Bitcoin network for this call. */
         bitcoinNetwork?: BitcoinNetwork;
     }): Promise<string> {
-        const [mpcKey, snap] = await Promise.all([this.view.mpcPublicKey(), this.view.all()]);
-        if (!snap.guardianBtcPublicKey) {
-            throw HashiConfigError.missing("guardian_btc_public_key", "Bytes");
-        }
+        const { json, contents } = await this.#fetchHashiObject();
         return generateDepositAddressRaw({
-            mpcMasterCompressed: mpcKey,
-            guardianBtcXOnly: snap.guardianBtcPublicKey,
-            suiAddress: fromHex(suiAddress),
+            mpcMasterCompressed: parseMpcPublicKey(json.committee_set.mpc_public_key),
+            guardianBtcXOnly: configBytes(
+                contents,
+                "guardian_btc_public_key",
+                GUARDIAN_BTC_PUBLIC_KEY_LEN,
+            ),
+            suiAddress: fromHex(normalizeSuiAddress(suiAddress)),
             network: bitcoinNetwork,
         });
     }
@@ -633,23 +636,16 @@ export class HashiClient {
             }
         };
         const optionalBytes = (key: string, expectedLen: number): Uint8Array | null => {
-            let v;
             try {
-                v = entry(contents, key, "Bytes");
+                return configBytes(contents, key, expectedLen);
             } catch (e) {
+                // A genuinely-absent key (no `actualVariant`) is optional; a
+                // wrong variant or bad length is a real malformation — rethrow.
                 if (e instanceof HashiConfigError && e.actualVariant === undefined) {
                     return null;
                 }
                 throw e;
             }
-            if (v.Bytes.length !== expectedLen) {
-                throw HashiConfigError.malformedPayload(
-                    key,
-                    "Bytes",
-                    `expected ${expectedLen} bytes, got ${v.Bytes.length}`,
-                );
-            }
-            return new Uint8Array(v.Bytes);
         };
 
         const rawDepositMin = u64("bitcoin_deposit_minimum");
@@ -695,17 +691,7 @@ export class HashiClient {
                 client: this.#client,
                 objectId: this.#hashiObjectId,
             });
-
-            const mpcKey = new Uint8Array(result.json.committee_set.mpc_public_key);
-
-            if (mpcKey.length === 0) {
-                throw HashiConfigError.missing(
-                    "committee_set.mpc_public_key",
-                    "Bytes",
-                );
-            }
-
-            return arkworksToSec1Compressed(mpcKey);
+            return parseMpcPublicKey(result.json.committee_set.mpc_public_key);
         },
 
         /**
@@ -715,26 +701,7 @@ export class HashiClient {
          * you all fields from the same on-chain state.
          */
         all: async (): Promise<GovernanceConfig> => {
-            let result;
-            try {
-                result = await Hashi.get({
-                    client: this.#client,
-                    objectId: this.#hashiObjectId,
-                });
-            } catch (cause) {
-                throw new HashiFetchError(
-                    `Failed to fetch Hashi shared object ${this.#hashiObjectId}.`,
-                    this.#hashiObjectId,
-                    { cause },
-                );
-            }
-            const contents = result.json?.config?.config?.contents;
-            if (!Array.isArray(contents)) {
-                throw new HashiFetchError(
-                    `Hashi object ${this.#hashiObjectId} returned an unexpected shape: config.config.contents is not an array.`,
-                    this.#hashiObjectId,
-                );
-            }
+            const { contents } = await this.#fetchHashiObject();
             return this.#parseConfig(contents);
         },
 
@@ -1272,6 +1239,41 @@ export class HashiClient {
     // ------------------------------------------------------------------
 
     /**
+     * Fetches the Hashi shared object once and returns its decoded `json`
+     * alongside the validated governance-config `contents` array. Wraps
+     * transport failures and unexpected shapes in `HashiFetchError`. Shared by
+     * `view.all()` and `generateDepositAddress` so a single round-trip serves
+     * both the committee key (from `json`) and the config reads (from
+     * `contents`).
+     */
+    async #fetchHashiObject(): Promise<{
+        json: Awaited<ReturnType<typeof Hashi.get>>["json"];
+        contents: readonly ConfigEntry[];
+    }> {
+        let result;
+        try {
+            result = await Hashi.get({
+                client: this.#client,
+                objectId: this.#hashiObjectId,
+            });
+        } catch (cause) {
+            throw new HashiFetchError(
+                `Failed to fetch Hashi shared object ${this.#hashiObjectId}.`,
+                this.#hashiObjectId,
+                { cause },
+            );
+        }
+        const contents = result.json?.config?.config?.contents;
+        if (!Array.isArray(contents)) {
+            throw new HashiFetchError(
+                `Hashi object ${this.#hashiObjectId} returned an unexpected shape: config.config.contents is not an array.`,
+                this.#hashiObjectId,
+            );
+        }
+        return { json: result.json, contents };
+    }
+
+    /**
      * Fetches the `BitcoinState` dynamic field from the Hashi shared object.
      * Returns the BCS-parsed struct whose nested Bag/Table IDs are used by
      * `findUsedUtxos` and `transactionHistory`.
@@ -1463,6 +1465,19 @@ export class HashiClient {
             (item as { btcTxid: string | null }).btcTxid = reverseTxidBytes(parsed.txid);
         }
     }
+}
+
+/**
+ * Convert the on-chain `committee_set.mpc_public_key` (arkworks-compressed)
+ * into a 33-byte SEC1 key. Throws `HashiConfigError` if DKG hasn't populated
+ * it yet (empty vector).
+ */
+function parseMpcPublicKey(raw: ArrayLike<number>): Uint8Array {
+    const mpcKey = new Uint8Array(raw);
+    if (mpcKey.length === 0) {
+        throw HashiConfigError.missing("committee_set.mpc_public_key", "Bytes");
+    }
+    return arkworksToSec1Compressed(mpcKey);
 }
 
 function parseDepositHistoryItem(content: Uint8Array, timeDelayMs: bigint | null): DepositHistoryItem {
