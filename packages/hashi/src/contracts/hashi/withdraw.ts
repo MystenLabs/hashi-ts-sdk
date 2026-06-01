@@ -31,6 +31,7 @@ export const WithdrawalSignedMessage = new MoveStruct({
         withdrawal_id: bcs.Address,
         request_ids: bcs.vector(bcs.Address),
         signatures: bcs.vector(bcs.vector(bcs.u8())),
+        guardian_signatures: bcs.vector(bcs.vector(bcs.u8())),
     },
 });
 export const WithdrawalConfirmationMessage = new MoveStruct({
@@ -174,6 +175,7 @@ export interface SignWithdrawalArguments {
     withdrawalId: RawTransactionArgument<string>;
     requestIds: RawTransactionArgument<string[]>;
     signatures: RawTransactionArgument<number[][]>;
+    guardianSignatures: RawTransactionArgument<number[][]>;
     cert: RawTransactionArgument<string>;
 }
 export interface SignWithdrawalOptions {
@@ -185,6 +187,7 @@ export interface SignWithdrawalOptions {
               withdrawalId: RawTransactionArgument<string>,
               requestIds: RawTransactionArgument<string[]>,
               signatures: RawTransactionArgument<number[][]>,
+              guardianSignatures: RawTransactionArgument<number[][]>,
               cert: RawTransactionArgument<string>,
           ];
 }
@@ -195,9 +198,17 @@ export function signWithdrawal(options: SignWithdrawalOptions) {
         "address",
         "vector<address>",
         "vector<vector<u8>>",
+        "vector<vector<u8>>",
         null,
     ] satisfies (string | null)[];
-    const parameterNames = ["hashi", "withdrawalId", "requestIds", "signatures", "cert"];
+    const parameterNames = [
+        "hashi",
+        "withdrawalId",
+        "requestIds",
+        "signatures",
+        "guardianSignatures",
+        "cert",
+    ];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,
@@ -230,6 +241,34 @@ export function confirmWithdrawal(options: ConfirmWithdrawalOptions) {
             package: packageAddress,
             module: "withdraw",
             function: "confirm_withdrawal",
+            arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        });
+}
+export interface CleanupSpentUtxosArguments {
+    hashi: RawTransactionArgument<string>;
+    utxoIds: RawTransactionArgument<string[]>;
+}
+export interface CleanupSpentUtxosOptions {
+    package?: string;
+    arguments:
+        | CleanupSpentUtxosArguments
+        | [hashi: RawTransactionArgument<string>, utxoIds: RawTransactionArgument<string[]>];
+}
+/**
+ * Finalize the on-chain bookkeeping for spent UTXOs. Moves each UTXO's record from
+ * `utxo_records` to `spent_utxos`, reading the spent epoch from the record's
+ * `spent_epoch` field (set by `mark_spent` during `confirm_withdrawal`). Callers
+ * pass the individual UTXO IDs to clean up.
+ */
+export function cleanupSpentUtxos(options: CleanupSpentUtxosOptions) {
+    const packageAddress = options.package ?? "@local-pkg/hashi";
+    const argumentsTypes = [null, "vector<null>"] satisfies (string | null)[];
+    const parameterNames = ["hashi", "utxoIds"];
+    return (tx: Transaction) =>
+        tx.moveCall({
+            package: packageAddress,
+            module: "withdraw",
+            function: "cleanup_spent_utxos",
             arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         });
 }

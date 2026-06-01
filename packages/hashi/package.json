@@ -44,7 +44,7 @@
         "test": "vitest --project=unit",
         "test:integration": "vitest run --project=integration",
         "coverage": "vitest run --project=unit --coverage",
-        "codegen": "sui-ts-codegen generate",
+        "codegen": "sui-ts-codegen generate && prettier --ignore-path /dev/null --tab-width 4 --print-width 100 --write 'src/contracts/**/*.ts'",
         "format": "prettier --write \"**/*.{ts,json,md}\""
     },
     "peerDependencies": {

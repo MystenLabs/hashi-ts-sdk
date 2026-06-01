@@ -21,6 +21,7 @@ export const UtxoRecord = new MoveStruct({
         utxo: utxo.Utxo,
         produced_by: bcs.option(bcs.Address),
         locked_by: bcs.option(bcs.Address),
+        spent_epoch: bcs.option(bcs.u64()),
     },
 });
 export const UtxoSpentEvent = new MoveStruct({

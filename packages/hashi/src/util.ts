@@ -61,3 +61,24 @@ export function entry<K extends ConfigValue["$kind"]>(
     }
     return e.value as Extract<ConfigValue, { $kind: K }>;
 }
+
+/**
+ * Read a `Bytes` config entry and assert its byte length. Throws
+ * `HashiConfigError` if the key is missing, holds a non-`Bytes` variant, or
+ * has the wrong length.
+ */
+export function configBytes(
+    contents: readonly ConfigEntry[],
+    key: string,
+    expectedLen: number,
+): Uint8Array {
+    const v = entry(contents, key, "Bytes");
+    if (v.Bytes.length !== expectedLen) {
+        throw HashiConfigError.malformedPayload(
+            key,
+            "Bytes",
+            `expected ${expectedLen} bytes, got ${v.Bytes.length}`,
+        );
+    }
+    return new Uint8Array(v.Bytes);
+}

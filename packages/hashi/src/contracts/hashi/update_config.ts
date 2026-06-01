@@ -4,19 +4,18 @@
 import { MoveStruct, normalizeMoveArguments, type RawTransactionArgument } from "../utils/index.js";
 import { bcs } from "@mysten/sui/bcs";
 import { type Transaction } from "@mysten/sui/transactions";
+import * as vec_map from "./deps/sui/vec_map.js";
 import * as config_value from "./config_value.js";
 const $moduleName = "@local-pkg/hashi::update_config";
 export const UpdateConfig = new MoveStruct({
     name: `${$moduleName}::UpdateConfig`,
     fields: {
-        key: bcs.string(),
-        value: config_value.Value,
+        entries: vec_map.VecMap(bcs.string(), config_value.Value),
     },
 });
 export interface ProposeArguments {
     hashi: RawTransactionArgument<string>;
-    key: RawTransactionArgument<string>;
-    value: RawTransactionArgument<string>;
+    entries: RawTransactionArgument<string>;
     metadata: RawTransactionArgument<string>;
 }
 export interface ProposeOptions {
@@ -25,21 +24,14 @@ export interface ProposeOptions {
         | ProposeArguments
         | [
               hashi: RawTransactionArgument<string>,
-              key: RawTransactionArgument<string>,
-              value: RawTransactionArgument<string>,
+              entries: RawTransactionArgument<string>,
               metadata: RawTransactionArgument<string>,
           ];
 }
 export function propose(options: ProposeOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [
-        null,
-        "0x1::string::String",
-        null,
-        null,
-        "0x2::clock::Clock",
-    ] satisfies (string | null)[];
-    const parameterNames = ["hashi", "key", "value", "metadata"];
+    const argumentsTypes = [null, null, null, "0x2::clock::Clock"] satisfies (string | null)[];
+    const parameterNames = ["hashi", "entries", "metadata"];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,

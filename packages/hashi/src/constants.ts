@@ -27,6 +27,18 @@ export const NUMS_KEY = new Uint8Array([
  */
 export const DUST_RELAY_MIN_VALUE = 546n;
 
+/**
+ * Length of the Guardian's Ed25519 attestation public key, in bytes. Matches
+ * `GUARDIAN_PUBLIC_KEY_LEN` in `hashi::config`.
+ */
+export const GUARDIAN_PUBLIC_KEY_LEN = 32;
+
+/**
+ * Length of the Guardian's BIP-340 x-only BTC public key, in bytes. Matches
+ * `GUARDIAN_BTC_PUBLIC_KEY_LEN` in `hashi::config`.
+ */
+export const GUARDIAN_BTC_PUBLIC_KEY_LEN = 32;
+
 export const NETWORK_CONFIG: Partial<Record<SuiNetwork, NetworkConfig>> = {
     devnet: {
         hashiObjectId: "0x61f1acbf8dd79d284cb312853389747a55a158b1b12a68554afcade05dec5f40",

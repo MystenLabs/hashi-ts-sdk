@@ -1,27 +1,21 @@
 /**************************************************************
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
-
-/**
- * Emergency pause/unpause governance module.
- *
- * A single proposal type that can either pause or unpause the bridge. Pausing uses
- * a low quorum for fast response; unpausing requires supermajority.
- */
-
 import { MoveStruct, normalizeMoveArguments, type RawTransactionArgument } from "../utils/index.js";
 import { bcs } from "@mysten/sui/bcs";
 import { type Transaction } from "@mysten/sui/transactions";
-const $moduleName = "@local-pkg/hashi::emergency_pause";
-export const EmergencyPause = new MoveStruct({
-    name: `${$moduleName}::EmergencyPause`,
+const $moduleName = "@local-pkg/hashi::update_guardian";
+export const UpdateGuardian = new MoveStruct({
+    name: `${$moduleName}::UpdateGuardian`,
     fields: {
-        pause: bcs.bool(),
+        url: bcs.string(),
+        public_key: bcs.vector(bcs.u8()),
     },
 });
 export interface ProposeArguments {
     hashi: RawTransactionArgument<string>;
-    pause: RawTransactionArgument<boolean>;
+    url: RawTransactionArgument<string>;
+    publicKey: RawTransactionArgument<number[]>;
     metadata: RawTransactionArgument<string>;
 }
 export interface ProposeOptions {
@@ -30,18 +24,25 @@ export interface ProposeOptions {
         | ProposeArguments
         | [
               hashi: RawTransactionArgument<string>,
-              pause: RawTransactionArgument<boolean>,
+              url: RawTransactionArgument<string>,
+              publicKey: RawTransactionArgument<number[]>,
               metadata: RawTransactionArgument<string>,
           ];
 }
 export function propose(options: ProposeOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, "bool", null, "0x2::clock::Clock"] satisfies (string | null)[];
-    const parameterNames = ["hashi", "pause", "metadata"];
+    const argumentsTypes = [
+        null,
+        "0x1::string::String",
+        "vector<u8>",
+        null,
+        "0x2::clock::Clock",
+    ] satisfies (string | null)[];
+    const parameterNames = ["hashi", "url", "publicKey", "metadata"];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,
-            module: "emergency_pause",
+            module: "update_guardian",
             function: "propose",
             arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         });
@@ -66,7 +67,7 @@ export function execute(options: ExecuteOptions) {
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,
-            module: "emergency_pause",
+            module: "update_guardian",
             function: "execute",
             arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         });
