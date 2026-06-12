@@ -6,10 +6,10 @@
  * and the Hashi guardian co-sign the withdrawal that spends it, and the bridge
  * mints equivalent tokens on Sui.
  *
- * The deposit address is a 2-of-2 Pay-to-Taproot (P2TR / BIP-341) script-path
- * address whose spending condition is `multi_a(2, guardian_btc_pubkey,
- * derive(mpc_master, sui_address))` — both the guardian enclave's BIP-340 key
- * and the MPC-derived child key must produce a Schnorr signature to spend.
+ * The deposit address is a Pay-to-Taproot (P2TR / BIP-341) script-path address
+ * with two leaves: an immediate `multi_a(2, guardian_btc_pubkey,
+ * derive(mpc_master, sui_address))` spend, and a delayed MPC-only recovery
+ * spend after Hashi's BIP-68 relative timelock.
  *
  * The full derivation pipeline is:
  *
@@ -24,17 +24,17 @@
  *    (see {@link deriveChildPubkey}). This replicates the Rust function
  *    `fastcrypto_tbls::threshold_schnorr::key_derivation::derive_verifying_key`.
  *
- * 3. **Build** the taproot address: `tr(NUMS, multi_a(2, guardian, child))`
+ * 3. **Build** the taproot address:
+ *    `tr(NUMS, {multi_a(2, guardian, child), and_v(v:older(delay), pk(child))})`
  *    where NUMS is a Nothing-Up-My-Sleeve point with no known private key,
  *    forcing all spends through the script path (see
  *    {@link twoOfTwoTaprootScriptPathAddress}).
  *
  * The end-to-end helper {@link generateDepositAddress} combines steps 2–3.
  *
- * Mirrors `two_of_two_taproot_script_path_address` in
- * `crates/hashi-types/src/guardian/bitcoin_utils.rs`. Cross-language test
- * vectors live in both this file's unit tests and the matching Rust unit test
- * `cross_lang_2of2_test_vectors`.
+ * Mirrors `taproot_address` in `crates/hashi-types/src/bitcoin/taproot.rs`.
+ * Cross-language test vectors live in both this file's unit tests and the
+ * matching Rust unit test `cross_lang_2of2_test_vectors`.
  *
  * @see https://mystenlabs.github.io/hashi/design/address-scheme.html
  */
@@ -54,6 +54,9 @@ const Point = secp256k1.Point;
 const CURVE_ORDER = Point.CURVE().n;
 
 const NUMS_POINT = Point.fromBytes(concatBytes(new Uint8Array([0x02]), NUMS_KEY));
+const HASHI_MPC_RECOVERY_DELAY_SECONDS = 60 * 24 * 60 * 60;
+const HASHI_MPC_RECOVERY_DELAY_SEQUENCE =
+    (1 << 22) | Math.ceil(HASHI_MPC_RECOVERY_DELAY_SECONDS / 512);
 
 // ---------------------------------------------------------------------------
 //  Internal helpers
@@ -72,6 +75,54 @@ function bytesToNumberBE(bytes: Uint8Array): bigint {
         n = (n << 8n) | BigInt(byte);
     }
     return n;
+}
+
+/** CompactSize for scripts small enough to fit in one byte. */
+function compactSize(len: number): Uint8Array {
+    if (len >= 253) {
+        throw new Error(`Unsupported script length ${len}`);
+    }
+    return new Uint8Array([len]);
+}
+
+function scriptNum(n: number): Uint8Array {
+    if (n === 0) return new Uint8Array();
+
+    const bytes: number[] = [];
+    let value = n;
+    while (value > 0) {
+        bytes.push(value & 0xff);
+        value >>= 8;
+    }
+    if ((bytes[bytes.length - 1] & 0x80) !== 0) {
+        bytes.push(0);
+    }
+    return new Uint8Array(bytes);
+}
+
+function pushBytes(bytes: Uint8Array): Uint8Array {
+    if (bytes.length >= 0x4c) {
+        throw new Error(`Unsupported push length ${bytes.length}`);
+    }
+    return concatBytes(new Uint8Array([bytes.length]), bytes);
+}
+
+function lexicographicCompare(a: Uint8Array, b: Uint8Array): number {
+    const len = Math.min(a.length, b.length);
+    for (let i = 0; i < len; i++) {
+        if (a[i] !== b[i]) return a[i] - b[i];
+    }
+    return a.length - b.length;
+}
+
+function tapLeafHash(script: Uint8Array): Uint8Array {
+    return taggedHash("TapLeaf", new Uint8Array([0xc0]), compactSize(script.length), script);
+}
+
+function tapBranchHash(a: Uint8Array, b: Uint8Array): Uint8Array {
+    return lexicographicCompare(a, b) <= 0
+        ? taggedHash("TapBranch", a, b)
+        : taggedHash("TapBranch", b, a);
 }
 
 // ---------------------------------------------------------------------------
@@ -199,14 +250,14 @@ export function deriveChildPubkey(
 }
 
 /**
- * Builds a 2-of-2 P2TR script-path-only address:
- * `tr(NUMS, multi_a(2, guardian, derived_mpc))`.
+ * Builds Hashi's P2TR script-path-only deposit address:
+ * `tr(NUMS, {multi_a(2, guardian, derived_mpc), and_v(v:older(delay), pk(derived_mpc))})`.
  *
  * The leaf script is a BIP-342 `multi_a` 2-of-2 — both Schnorr signatures must
  * be present to spend, ordered so that the witness stack is
  * `[derived_mpc_sig, guardian_sig, leaf_script, control_block]` (LIFO). This
- * is the exact script the bridge's withdrawal path constructs in
- * `crates/hashi-types/src/guardian/bitcoin_utils.rs`'s `compute_taproot_descriptor`.
+ * is the exact immediate-spend script the bridge's withdrawal path constructs
+ * in `crates/hashi-types/src/bitcoin/taproot.rs`'s `compute_taproot_descriptor`.
  *
  * The leaf script is exactly 70 bytes:
  *
@@ -223,11 +274,17 @@ export function deriveChildPubkey(
  * codegen routes through `Builder::push_int(2)` which emits the small-num
  * opcode. A literal pushdata would change the leaf hash and the address.
  *
+ * The recovery leaf script is a BIP-342 `and_v(v:older(delay), pk(derived_mpc))`:
+ * after Hashi's 60-day BIP-68 relative timelock, the MPC child key alone can
+ * spend the output if the guardian key is unavailable.
+ *
  * The taproot output key is computed per BIP-341:
  *
  * ```text
- * leafHash  = tagged_hash("TapLeaf",  0xC0 ‖ compact_size(script) ‖ script)
- * tweak     = tagged_hash("TapTweak", NUMS ‖ leafHash)
+ * leaf1     = tagged_hash("TapLeaf",  0xC0 ‖ compact_size(two_of_two_script) ‖ two_of_two_script)
+ * leaf2     = tagged_hash("TapLeaf",  0xC0 ‖ compact_size(recovery_script) ‖ recovery_script)
+ * root      = tagged_hash("TapBranch", min(leaf1, leaf2) ‖ max(leaf1, leaf2))
+ * tweak     = tagged_hash("TapTweak", NUMS ‖ root)
  * outputKey = NUMS + tweak × G
  * ```
  *
@@ -248,9 +305,7 @@ export function twoOfTwoTaprootScriptPathAddress(
     network: BitcoinNetwork,
 ): string {
     if (guardianBtcXOnly.length !== 32) {
-        throw new Error(
-            `Expected 32-byte x-only guardian pubkey, got ${guardianBtcXOnly.length}`,
-        );
+        throw new Error(`Expected 32-byte x-only guardian pubkey, got ${guardianBtcXOnly.length}`);
     }
     if (derivedMpcXOnly.length !== 32) {
         throw new Error(
@@ -262,24 +317,29 @@ export function twoOfTwoTaprootScriptPathAddress(
     //   OP_PUSHBYTES_32 <guardian>    OP_CHECKSIG
     //   OP_PUSHBYTES_32 <derived_mpc> OP_CHECKSIGADD
     //   OP_2 OP_NUMEQUAL
-    const tapscript = new Uint8Array(70);
-    tapscript[0] = 0x20; // OP_PUSHBYTES_32
-    tapscript.set(guardianBtcXOnly, 1);
-    tapscript[33] = 0xac; // OP_CHECKSIG
-    tapscript[34] = 0x20; // OP_PUSHBYTES_32
-    tapscript.set(derivedMpcXOnly, 35);
-    tapscript[67] = 0xba; // OP_CHECKSIGADD
-    tapscript[68] = 0x52; // OP_2
-    tapscript[69] = 0x9c; // OP_NUMEQUAL
+    const twoOfTwoScript = new Uint8Array(70);
+    twoOfTwoScript[0] = 0x20; // OP_PUSHBYTES_32
+    twoOfTwoScript.set(guardianBtcXOnly, 1);
+    twoOfTwoScript[33] = 0xac; // OP_CHECKSIG
+    twoOfTwoScript[34] = 0x20; // OP_PUSHBYTES_32
+    twoOfTwoScript.set(derivedMpcXOnly, 35);
+    twoOfTwoScript[67] = 0xba; // OP_CHECKSIGADD
+    twoOfTwoScript[68] = 0x52; // OP_2
+    twoOfTwoScript[69] = 0x9c; // OP_NUMEQUAL
 
-    // BIP-341 leaf hash: tagged_hash("TapLeaf", leaf_version ‖ compact_size(len) ‖ script).
-    // tapscript.length === 70 < 253 → compact_size is a single byte.
-    const leafPrefix = new Uint8Array([0xc0, tapscript.length]);
-    const leafHash = taggedHash("TapLeaf", leafPrefix, tapscript);
+    // Tapscript for `and_v(v:older(delay), pk(derived_mpc))`:
+    //   <bip68_sequence> OP_CHECKSEQUENCEVERIFY OP_VERIFY <derived_mpc> OP_CHECKSIG
+    const recoveryScript = concatBytes(
+        pushBytes(scriptNum(HASHI_MPC_RECOVERY_DELAY_SEQUENCE)),
+        new Uint8Array([0xb2, 0x69, 0x20]), // OP_CHECKSEQUENCEVERIFY OP_VERIFY OP_PUSHBYTES_32
+        derivedMpcXOnly,
+        new Uint8Array([0xac]), // OP_CHECKSIG
+    );
+
+    const merkleRoot = tapBranchHash(tapLeafHash(twoOfTwoScript), tapLeafHash(recoveryScript));
 
     // Tweak (BIP-341): tagged_hash("TapTweak", internal_key ‖ merkle_root).
-    // Single-leaf tree → merkle root IS the leaf hash.
-    const tweak = taggedHash("TapTweak", NUMS_KEY, leafHash);
+    const tweak = taggedHash("TapTweak", NUMS_KEY, merkleRoot);
     const tweakScalar = bytesToNumberBE(tweak) % CURVE_ORDER;
 
     // Output key = NUMS + tweak × G
@@ -319,11 +379,12 @@ export interface DepositAddressInputs {
  * Main entry point for the address derivation pipeline. Combines
  * {@link deriveChildPubkey} and {@link twoOfTwoTaprootScriptPathAddress} into
  * a single call. The produced address matches the Rust node's
- * `bitcoin_utils::two_of_two_taproot_script_path_address` byte-for-byte.
+ * `hashi_types::bitcoin::taproot::taproot_address` byte-for-byte.
  *
  * The address scheme is:
  * ```text
- * tr(NUMS, multi_a(2, guardian, derive(mpc_master, sui_address)))
+ * tr(NUMS, {multi_a(2, guardian, derive(mpc_master, sui_address)),
+ *           and_v(v:older(delay), pk(derive(mpc_master, sui_address)))})
  * ```
  *
  * @returns bech32m-encoded P2TR deposit address (e.g. `tb1p…` for signet)
@@ -467,10 +528,7 @@ export function bitcoinAddressToWitnessProgram(
  * @param network - Bitcoin network for the HRP
  * @returns Encoded bech32 (v0) or bech32m (v1+) address
  */
-export function witnessProgramToAddress(
-    program: Uint8Array,
-    network: BitcoinNetwork,
-): string {
+export function witnessProgramToAddress(program: Uint8Array, network: BitcoinNetwork): string {
     const hrp = NETWORK_HRP[network];
 
     if (program.length === 20) {
