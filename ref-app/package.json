@@ -1,0 +1,28 @@
+{
+    "name": "ref-app",
+    "private": true,
+    "version": "0.0.0",
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "tsc --noEmit && vite build",
+        "preview": "vite preview"
+    },
+    "dependencies": {
+        "@mysten-incubation/hashi": "workspace:*",
+        "@mysten-incubation/dev-wallet": "latest",
+        "@mysten/dapp-kit-react": "latest",
+        "@mysten/signers": "^1.0.1",
+        "@mysten/sui": "^2.16.2",
+        "@tanstack/react-query": "^5.0.0",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0"
+    },
+    "devDependencies": {
+        "@types/react": "^19.0.0",
+        "@types/react-dom": "^19.0.0",
+        "@vitejs/plugin-react": "^4.3.0",
+        "typescript": "^5.9.3",
+        "vite": "^6.0.0"
+    }
+}

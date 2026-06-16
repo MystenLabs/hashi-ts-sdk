@@ -1,0 +1,17 @@
+{
+    "extends": "../tsconfig.shared.json",
+    "compilerOptions": {
+        "composite": false,
+        "declaration": false,
+        "declarationMap": false,
+        "sourceMap": false,
+        "module": "ESNext",
+        "moduleResolution": "Bundler",
+        "isolatedModules": true,
+        "noEmit": true,
+        "allowImportingTsExtensions": true,
+        "useDefineForClassFields": true
+    },
+    "include": ["src"],
+    "references": [{ "path": "./tsconfig.node.json" }]
+}

@@ -17,6 +17,7 @@ export {
     witnessProgramToAddress,
 } from "./bitcoin.js";
 export type { DepositAddressInputs } from "./bitcoin.js";
+export { NETWORK_CONFIG, DUST_RELAY_MIN_VALUE } from "./constants.js";
 export type {
     BitcoinNetwork,
     CancelWithdrawalParams,
