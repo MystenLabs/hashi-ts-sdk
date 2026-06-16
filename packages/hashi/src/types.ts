@@ -56,8 +56,8 @@ export interface GovernanceConfig {
     readonly guardianPublicKey: Uint8Array | null;
     /**
      * Guardian's BIP-340 x-only secp256k1 BTC public key (32 bytes), the
-     * `pk1` slot of the on-chain 2-of-2 deposit-address descriptor. `null`
-     * if unset (deposit-address derivation will fail).
+     * `pk1` slot of the immediate 2-of-2 leaf in the on-chain deposit-address
+     * descriptor. `null` if unset (deposit-address derivation will fail).
      */
     readonly guardianBtcPublicKey: Uint8Array | null;
 }

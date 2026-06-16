@@ -184,10 +184,10 @@ export class HashiClient {
      *
      * Fetches the MPC committee public key and the guardian's BTC public key
      * from on-chain, derives an MPC child key against the Sui address, and
-     * builds a 2-of-2 taproot script-path address
-     * (`tr(NUMS, multi_a(2, guardian, derived_mpc))`). The address matches
-     * the bridge's on-chain `validate_deposit_request_derivation_path` check
-     * byte-for-byte.
+     * builds the Hashi taproot script tree: an immediate 2-of-2 leaf
+     * (`multi_a(2, guardian, derived_mpc)`) plus a delayed MPC-only recovery
+     * leaf. The address matches the bridge's on-chain
+     * `validate_deposit_request_derivation_path` check byte-for-byte.
      *
      * The MPC key (`committee_set.mpc_public_key`) and the guardian key
      * (`guardian_btc_public_key` config) come from a single fetch of the

@@ -28,7 +28,7 @@ const ZERO_ADDRESS = new Uint8Array(32); // 0x000…000
 // ---------------------------------------------------------------------------
 //
 // Mirrored byte-for-byte from
-// `crates/hashi-types/src/guardian/bitcoin_utils.rs` test
+// `crates/hashi-types/src/bitcoin/taproot.rs` test
 // `cross_lang_2of2_test_vectors`. The Rust test uses
 //   TEST_ENCLAVE_BTC_SK = [1u8; 32]   → enclave/guardian keypair
 //   TEST_HASHI_BTC_SK   = [2u8; 32]   → MPC master keypair
@@ -204,9 +204,7 @@ describe("twoOfTwoTaprootScriptPathAddress", () => {
             fromHex("0x80583e4abd7e73b0868a44e24dd05379375f1c3a85c4c1329bb0572df8577985"),
             "regtest",
         );
-        expect(btcAddress).toBe(
-            "bcrt1p0y0fqatuhy4rwt5ac99z7wse6u8zqzu73jmk0rls57uulnl7q4mq0pk06r",
-        );
+        expect(btcAddress).toBe("bcrt1p674xfkudr0myzu3jpschmc4wx9xjllf5wyqt4x8y48jnd099dchs0ww4kp");
     });
 });
 
@@ -255,29 +253,23 @@ describe("generateDepositAddress", () => {
         {
             label: "path = zero",
             path: RUST_PATH_ZERO,
-            expectedDerivedHex:
-                "80583e4abd7e73b0868a44e24dd05379375f1c3a85c4c1329bb0572df8577985",
-            expectedRegtest:
-                "bcrt1p0y0fqatuhy4rwt5ac99z7wse6u8zqzu73jmk0rls57uulnl7q4mq0pk06r",
-            expectedSignet: "tb1p0y0fqatuhy4rwt5ac99z7wse6u8zqzu73jmk0rls57uulnl7q4mqzcuf0e",
+            expectedDerivedHex: "80583e4abd7e73b0868a44e24dd05379375f1c3a85c4c1329bb0572df8577985",
+            expectedRegtest: "bcrt1p674xfkudr0myzu3jpschmc4wx9xjllf5wyqt4x8y48jnd099dchs0ww4kp",
+            expectedSignet: "tb1p674xfkudr0myzu3jpschmc4wx9xjllf5wyqt4x8y48jnd099dchszhynrm",
         },
         {
             label: "path = [1u8; 32]",
             path: RUST_PATH_ONES,
-            expectedDerivedHex:
-                "1b79f716fb1f7beba697f012edcf7b81a96ceac2920b181bd217c9cc017ac7fb",
-            expectedRegtest:
-                "bcrt1pftf88nkuljl4rlsd4xqyq7sy0fzjedws5egf7nuyq4lkkj3hdz2sdfq4a0",
-            expectedSignet: "tb1pftf88nkuljl4rlsd4xqyq7sy0fzjedws5egf7nuyq4lkkj3hdz2sqs2ng4",
+            expectedDerivedHex: "1b79f716fb1f7beba697f012edcf7b81a96ceac2920b181bd217c9cc017ac7fb",
+            expectedRegtest: "bcrt1plf0jem4745f5yhu4x3q226q4f34jw6nxysyqvyxjxem0gugqrxnsn6mjae",
+            expectedSignet: "tb1plf0jem4745f5yhu4x3q226q4f34jw6nxysyqvyxjxem0gugqrxns7r35gr",
         },
         {
             label: "path = 0xab..00..cd",
             path: RUST_PATH_AB_CD,
-            expectedDerivedHex:
-                "1403322badfd7823bebf81e9c5ff74f32f856348ac0f5abe33130cc4b6a14c84",
-            expectedRegtest:
-                "bcrt1pe82wsztzxt97jwkx6wcls257xaycfxw7up4k0ju7r6rsf07zxdlsyg9dfv",
-            expectedSignet: "tb1pe82wsztzxt97jwkx6wcls257xaycfxw7up4k0ju7r6rsf07zxdlsf30tuk",
+            expectedDerivedHex: "1403322badfd7823bebf81e9c5ff74f32f856348ac0f5abe33130cc4b6a14c84",
+            expectedRegtest: "bcrt1p2zdq5arv2k7cec0jwstrt3twsnvrze66q4eaqujr4aykuzzu7wwq893cha",
+            expectedSignet: "tb1p2zdq5arv2k7cec0jwstrt3twsnvrze66q4eaqujr4aykuzzu7wwq2um7z8",
         },
     ])(
         "matches Rust cross-language vector: $label",
@@ -337,10 +329,8 @@ describe("generateDepositAddress", () => {
         const path = RUST_PATH_ONES;
         const expectedDerivedHex =
             "d6305db510d6cb87554c942aaaffa3ff277366c2a04b8e64f633cceebd05f937";
-        const expectedRegtest =
-            "bcrt1pcpxn30jztmndchw204yr2hjzpy6eqq3k8lauehq2nf2wduu3yzcs2uprtq";
-        const expectedSignet =
-            "tb1pcpxn30jztmndchw204yr2hjzpy6eqq3k8lauehq2nf2wduu3yzcs89t976";
+        const expectedRegtest = "bcrt1p09kjf0dz6a4qmdvwqydp902zxz4tr0rp60pe4nl7y4y8vfakf7zsv6mzk8";
+        const expectedSignet = "tb1p09kjf0dz6a4qmdvwqydp902zxz4tr0rp60pe4nl7y4y8vfakf7zspr3yra";
 
         const derived = deriveChildPubkey(RUST_HASHI_MASTER_SEC1_NATURAL_ODD_Y, path);
         expect(Buffer.from(derived).toString("hex")).toBe(expectedDerivedHex);

@@ -82,7 +82,7 @@ Each Sui address maps to a unique P2TR (Pay-to-Taproot) Bitcoin deposit address 
 
 1. Read the MPC committee master key (`CommitteeSet.mpc_public_key`, 33-byte compressed secp256k1) and the guardian's x-only BTC key (`guardian_btc_public_key` config) from on-chain
 2. Derive child key: `HKDF-SHA3-256(ikm = parent_x ‖ sui_address, len=64) mod n` → `child = parent + tweak × G`
-3. Build taproot address: `tr(NUMS, multi_a(2, guardian, child))` — both the guardian and the MPC-derived child must Schnorr-sign to spend. Mandatory on every network (mirrors hashi#609); `generateDepositAddress` throws until the deployment publishes `guardian_btc_public_key`.
+3. Build taproot address: `tr(NUMS, {multi_a(2, guardian, child), and_v(v:older(delay), pk(child))})` — normal spends need both guardian and MPC-derived child signatures; the delayed recovery leaf lets the MPC child spend alone after the BIP-68 timelock. Mandatory on every network; `generateDepositAddress` throws until the deployment publishes `guardian_btc_public_key`.
 
 See https://mystenlabs.github.io/hashi/design/address-scheme.html
 
