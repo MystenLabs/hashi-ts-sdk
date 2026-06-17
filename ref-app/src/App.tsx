@@ -53,7 +53,7 @@ export function App() {
                         needed).
                     </li>
                     <li>
-                        §3 derive your unique 2-of-2 deposit address, then fund it with signet BTC
+                        §3 derive your unique taproot deposit address, then fund it with signet BTC
                         (e.g.{" "}
                         <a href="https://signetfaucet.com" target="_blank" rel="noreferrer">
                             signetfaucet.com

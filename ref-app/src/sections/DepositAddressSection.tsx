@@ -36,8 +36,9 @@ export function DepositAddressSection() {
                 Calls <code>{`client.hashi.generateDepositAddress({ suiAddress })`}</code>
             </p>
             <p className="muted small">
-                A unique P2TR signet address — a 2-of-2 taproot{" "}
-                <code>tr(NUMS, multi_a(2, guardian, mpc-child))</code>. Send signet BTC here (e.g.{" "}
+                A unique P2TR signet address — a timelock taproot tree: an immediate 2-of-2 leaf{" "}
+                <code>multi_a(2, guardian, child)</code> and a delayed MPC-only recovery leaf. Send
+                signet BTC here (e.g.{" "}
                 <a href="https://signetfaucet.com" target="_blank" rel="noreferrer">
                     signetfaucet.com
                 </a>

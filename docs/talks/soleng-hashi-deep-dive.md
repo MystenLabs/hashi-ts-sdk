@@ -87,7 +87,7 @@ flowchart TB
   end
 
   %% User-facing flows (SDK calls)
-  User -->|"generateDepositAddress(), then send BTC to the 2-of-2 taproot address"| BTC
+  User -->|"generateDepositAddress(), then send BTC to the derived taproot address"| BTC
   User -->|"tx.deposit() / tx.requestWithdrawal()"| BtcState
   User -. "view.* reads (status, config, balance, history)" .-> OnChain
   Coin -->|"committee mints hBTC → use in DeFi"| User
@@ -101,7 +101,7 @@ flowchart TB
   Node -->|"broadcast signed withdrawal tx"| BTC
 ```
 
-**2-of-2 taproot:** `tr(NUMS, multi_a(2, guardian, mpc-child))` — the guardian leaf and the MPC-child must **both** Schnorr-sign to move funds.
+**Taproot deposit address:** `tr(NUMS, { multi_a(2, guardian, child), and_v(v:older(delay), pk(child)) })` — normal spends need the guardian **and** the MPC-child (2-of-2); a timelocked recovery leaf lets the MPC-child spend alone if the guardian is unavailable.
 
 <!-- Speaker notes: This is the diagram to leave partners with. Users straddle Bitcoin (broadcast deposit / receive withdrawal) and Sui (notify, withdraw, use hBTC). The Rust committee + guardian services sit in the middle and are deliberately STATELESS — the canonical state lives on Sui in the Hashi shared object (committee set, config, treasury, proposals, the BitcoinState UTXO pool, and the deposit/withdrawal queues). Note: the design docs describe certificates submitted by "one validator/member" and batched txs built by a "leader"; there is no separate standalone relayer role in the docs I read. -->
 
@@ -181,30 +181,35 @@ self.epoch = next_epoch;
 
 ---
 
-## Deposit address scheme (2-of-2 taproot)
+## Deposit address scheme (timelock taproot tree)
 
 - Every Sui address maps to **one unique P2TR** (BIP-341) deposit address — the address itself is the routing key.
-- Descriptor: **`tr(NUMS, multi_a(2, guardian, mpc-child))`** — a single 2-of-2 script leaf.
-  - `NUMS` internal key → no key-path spend → **all spends go via the script path**.
-  - `guardian` = guardian's fixed x-only BTC key; `mpc-child` = derived per Sui address.
+- Descriptor: **`tr(NUMS, { multi_a(2, guardian, child), and_v(v:older(delay), pk(child)) })`** — `NUMS` internal key (no key-path spend) over **two** script leaves:
+  - **Immediate leaf** `multi_a(2, guardian, child)` — normal spend: guardian **and** MPC-child both Schnorr-sign.
+  - **Recovery leaf** `and_v(v:older(delay), pk(child))` — after a BIP-68 relative timelock, the MPC-child can spend **alone** (guardian-outage recovery).
 - **Child derivation** (replicates `fastcrypto_tbls … derive_verifying_key`):
   `tweak = HKDF-SHA3-256(parent_x ‖ sui_address, len=64) mod n`; `child = parent + tweak·G`.
-- Bech32m-encoded: `bc1p…` (mainnet) / `tb1p…` (signet/testnet) / `bcrt1p…` (regtest).
+- `merkle_root = TapBranch(min(leaf1, leaf2), max(leaf1, leaf2))`; bech32m `bc1p…` / `tb1p…` / `bcrt1p…`.
 
 ```text
-0x20 || guardian (32)  0xAC   // <pk1> OP_CHECKSIG
-0x20 || mpc-child(32)  0xBA   // <pk2> OP_CHECKSIGADD
-0x52                          // OP_2
-0x9C                          // OP_NUMEQUAL  (70-byte multi_a leaf)
+# immediate 2-of-2 leaf (70 bytes)
+0x20 ‖ guardian (32)  0xAC   // <pk1> OP_CHECKSIG
+0x20 ‖ child    (32)  0xBA   // <pk2> OP_CHECKSIGADD
+0x52                         // OP_2
+0x9C                         // OP_NUMEQUAL
+
+# delayed MPC-only recovery leaf
+<bip68_seq>  0xB2  0x69      // <delay> OP_CHECKSEQUENCEVERIFY OP_VERIFY
+0x20 ‖ child    (32)  0xAC   // <pk2> OP_CHECKSIG
 ```
 
-<!-- Speaker notes: Connect the single MPC master key to what users actually see — their deposit address. No per-user DKG: each address is a deterministic HKDF tweak of the master key bound to the Sui address. The 2-of-2 is the structural reason a committee compromise alone can't move funds: MPC controls the child leg, guardian controls the other, and BOTH must Schnorr-sign. Two implementation gotchas for tooling builders: operand order (guardian first) is load-bearing, and OP_2 is the 0x52 small-num opcode (rust-miniscript style) — either deviation changes the address. ACCURACY CAVEAT: address-scheme.mdx still documents a devnet-only single-key variant tr(i, pk(h)) WITHOUT the guardian; CLAUDE.md + the SDK now treat the 2-of-2 form as mandatory everywhere (mirroring hashi#609). So what a partner sees on devnet today may differ from the production 2-of-2 design — verify against the live deployment. -->
+<!-- Speaker notes: Connect the single MPC master key to what users actually see — their deposit address. No per-user DKG: each address is a deterministic HKDF tweak of the master key bound to the Sui address. The taproot output now has TWO leaves (SDK PR #34): the immediate 2-of-2 (guardian + MPC-child, both must Schnorr-sign — why a committee compromise alone can't move funds) and a delayed MPC-only recovery leaf, so the MPC committee can still recover funds if the guardian goes dark, but only after a BIP-68 relative timelock. Implementation gotchas for tooling builders: operand order (guardian first) is load-bearing; OP_2 is the 0x52 small-num opcode (rust-miniscript style); and the two leaf hashes are sorted (min‖max) into the TapBranch — any deviation changes the address. ACCURACY CAVEAT: the public address-scheme.mdx page may still describe an older/single-leaf variant; the SDK (bitcoin.ts, #34) is authoritative for what generateDepositAddress actually produces — verify against the live deployment. -->
 
 ---
 
 ## Guardian & sanctions / compliance
 
-- The **guardian** is a mandatory **second signatory**: every deposit is 2-of-2 (guardian + MPC committee). Defense in depth against a compromised _or malicious past_ committee (guardian.mdx).
+- The **guardian** is the **second signatory** on the immediate spend path: normal moves are 2-of-2 (guardian + MPC committee) — defense in depth against a compromised _or malicious past_ committee. A timelocked recovery leaf lets the MPC committee recover funds **alone** if the guardian is unavailable (guardian.mdx).
 - Runs inside an **AWS Nitro Enclave** (TEE): ephemeral keys per session, NSM attestation over its signing key, signed immutable S3 audit logs; enforces a withdrawal **rate limiter** and verifies the committee cert before co-signing.
 - **Sanctions screening is per-validator, best-effort** (sanctions.mdx): each member calls a configurable gRPC `ScreenerService.Approve` at vote time (OFAC list, TRM, Chainalysis; ref impl uses MerkleScience).
 - Limits to be honest about: a quorum can accept what one validator rejected; once a UTXO is in the pool it's treated as the protocol's own.
@@ -255,7 +260,7 @@ assert!(approval_timestamp_ms + config.deposit_time_delay_ms()
   - `>1/3` malicious → can stall/censor; `>2/3` malicious → could act maliciously.
   - Guardian adds defense-in-depth, **not custody**; its BTC key is immutable once set.
 
-<!-- Speaker notes: This is the slide partners care about most. Two independent layers. Layer 1: the committee is drawn from Sui validators and weighted by Sui stake, so trusting Hashi ≈ trusting Sui's >2/3 honest-stake assumption. The asymmetric thresholds are a strong story: the most dangerous actions need 100%; routine changes need >2/3; emergency pause is cheap (5% default) so a small honest minority can halt fast, but un-pausing needs a real supermajority; and you cannot disable the active version (no accidental brick). Layer 2: the guardian is a second mandatory signer on a 2-of-2 — it never holds keys alone, is not a custodian, and its BTC key is pinned forever (rotating it would invalidate every derived address). Caveats: the 500/6667 pause values are in-code DEFAULTS, governance-tunable; the BFT attack taxonomy is the standard interpretation, not spelled out verbatim in docs. -->
+<!-- Speaker notes: This is the slide partners care about most. Two independent layers. Layer 1: the committee is drawn from Sui validators and weighted by Sui stake, so trusting Hashi ≈ trusting Sui's >2/3 honest-stake assumption. The asymmetric thresholds are a strong story: the most dangerous actions need 100%; routine changes need >2/3; emergency pause is cheap (5% default) so a small honest minority can halt fast, but un-pausing needs a real supermajority; and you cannot disable the active version (no accidental brick). Layer 2: the guardian co-signs the immediate 2-of-2 spend path (a timelocked leaf allows MPC-only recovery after a delay) — it never holds keys alone, is not a custodian, and its BTC key is pinned forever (rotating it would invalidate every derived address). Caveats: the 500/6667 pause values are in-code DEFAULTS, governance-tunable; the BFT attack taxonomy is the standard interpretation, not spelled out verbatim in docs. -->
 
 ---
 
@@ -379,7 +384,7 @@ const provisioned = cfg.guardianBtcPublicKey != null; // null until set on-chain
 try {
   const btcAddr = await client.hashi.generateDepositAddress({
     suiAddress: account.address,
-  }); // -> tb1p… (bech32m, 2-of-2 P2TR)
+  }); // -> tb1p… (bech32m P2TR; timelock taproot tree)
 } catch (e) {
   if (e instanceof HashiConfigError) {
     /* guardian_btc_public_key not yet set */
@@ -389,7 +394,7 @@ try {
 
 **5 Governance Observability** — `view.all()` exposes every governance param + guardian provisioning state (`guardian*` null until set), so a dApp renders live status with **no operator access**.
 
-<!-- Speaker notes: generateDepositAddress fetches both keys in one round-trip, derives the per-Sui-address MPC child via HKDF-SHA3-256 (byte-for-byte matching the Rust fastcrypto derivation), and assembles the 2-of-2 taproot — guardian first (ordering load-bearing). It HARD-FAILS with HashiConfigError until the deployment publishes guardian_btc_public_key; the SDK refuses a single-key fallback because the bridge validator would reject it. Governance Observability is the umbrella: view.all() plus the null-or-set guardian fields let a partner dApp show live protocol status and a provisioning badge entirely from public reads. -->
+<!-- Speaker notes: generateDepositAddress fetches both keys in one round-trip, derives the per-Sui-address MPC child via HKDF-SHA3-256 (byte-for-byte matching the Rust fastcrypto derivation), and assembles the two-leaf taproot tree (immediate 2-of-2 + delayed recovery; guardian first — ordering load-bearing). It HARD-FAILS with HashiConfigError until the deployment publishes guardian_btc_public_key; the SDK refuses a single-key fallback because the bridge validator would reject it. Governance Observability is the umbrella: view.all() plus the null-or-set guardian fields let a partner dApp show live protocol status and a provisioning badge entirely from public reads. -->
 
 ---
 
@@ -472,7 +477,7 @@ pnpm install && pnpm --filter ref-app dev   # http://localhost:5173 (devnet / si
 - **§3 Deposit address** — `generateDepositAddress({ suiAddress })` → `tb1p…`; fund via a signet faucet.
 - **Fallbacks:** pre-DKG → §2 catches the `mpcPublicKey()` throw; guardian unset → §3 catches `HashiConfigError` ("guardian not provisioned").
 
-<!-- Speaker notes: Launch the app and connect dev-wallet first — no extension, key generated in-browser, which is what makes this reproducible on any laptop. §1 proves the SDK reads live governance config in one view.all(). §2 shows both halves of the security model — MPC key + guardian. §3 is the payoff: one generateDepositAddress call reproduces the entire 2-of-2 taproot derivation. CRITICAL: devnet may be pre-DKG and/or have no guardian provisioned — the app is built with graceful callouts for exactly this, so you never show a raw stack trace. Verify the devnet state BEFORE presenting so you know which path you're on. -->
+<!-- Speaker notes: Launch the app and connect dev-wallet first — no extension, key generated in-browser, which is what makes this reproducible on any laptop. §1 proves the SDK reads live governance config in one view.all(). §2 shows both halves of the security model — MPC key + guardian. §3 is the payoff: one generateDepositAddress call reproduces the entire taproot-tree derivation. CRITICAL: devnet may be pre-DKG and/or have no guardian provisioned — the app is built with graceful callouts for exactly this, so you never show a raw stack trace. Verify the devnet state BEFORE presenting so you know which path you're on. -->
 
 ---
 
@@ -519,7 +524,7 @@ await dAppKit.signAndExecuteTransaction({
 **You can now:** draw the architecture · state the trust model honestly · integrate the SDK · run the demo.
 
 - **Threshold Schnorr** MPC signer, committee = **subset of Sui validators** (no new trusted entity).
-- **2-of-2 taproot** (guardian + MPC-child) — defense in depth; hBTC is an ordinary `Coin<BTC>`.
+- **Timelock taproot** address — immediate 2-of-2 (guardian + MPC-child) + delayed MPC-only recovery; hBTC is an ordinary `Coin<BTC>`.
 - SDK is **strictly client-facing**: 5 read categories + 3 actions + polling + typed errors.
 
 **Resources**
@@ -530,4 +535,4 @@ await dAppKit.signAndExecuteTransaction({
 
 **Q & A**
 
-<!-- Speaker notes: Recap the three competencies. Reinforce the differentiators one last time: threshold Schnorr → simpler MPC, committee = Sui validator set → no new trusted entity, 2-of-2 guardian → defense in depth, hBTC = ordinary Coin. Point to resources: the public docs site, the npm package, and the ref-app as the runnable reference. For Q&A, the predictable hard questions are: tax/title (answer: original design goals only, NOT a protocol or legal guarantee), exact thresholds (answer: governance-configured; v1 t/f are ranges), and devnet vs production address scheme (answer: 2-of-2 is the mandatory production form; devnet may differ). -->
+<!-- Speaker notes: Recap the three competencies. Reinforce the differentiators one last time: threshold Schnorr → simpler MPC, committee = Sui validator set → no new trusted entity, 2-of-2 guardian → defense in depth, hBTC = ordinary Coin. Point to resources: the public docs site, the npm package, and the ref-app as the runnable reference. For Q&A, the predictable hard questions are: tax/title (answer: original design goals only, NOT a protocol or legal guarantee), exact thresholds (answer: governance-configured; v1 t/f are ranges), and devnet vs production address scheme (answer: the production form is a two-leaf timelock taproot (immediate 2-of-2 + delayed MPC-only recovery); the public address-scheme doc may lag the SDK). -->

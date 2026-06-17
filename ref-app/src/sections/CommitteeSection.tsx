@@ -72,9 +72,9 @@ export function CommitteeSection() {
                 </dd>
             </dl>
             <p className="muted small" style={{ marginTop: "0.5rem" }}>
-                Deposit addresses are 2-of-2 taproot outputs co-controlled by the MPC committee and
-                the guardian. Address derivation (§3) needs <code>guardianBtcPublicKey</code> set
-                on-chain.
+                Deposit addresses are taproot outputs with an immediate 2-of-2 leaf (MPC committee +
+                guardian) and a delayed MPC-only recovery leaf. Address derivation (§3) needs{" "}
+                <code>guardianBtcPublicKey</code> set on-chain.
             </p>
         </section>
     );
