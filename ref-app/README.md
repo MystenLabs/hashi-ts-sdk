@@ -49,10 +49,25 @@ form mempool.space shows) and vout(s) into §4. Address derivation (§3) require
 have published `guardian_btc_public_key`; until then the SDK throws `HashiConfigError` and the app
 shows a "guardian not provisioned" notice.
 
-## Optional: Bitcoin RPC
+## Configuration / pointing at a live deployment
 
-Set `VITE_BTC_RPC_URL` in a `.env` to enable `client.hashi.bitcoin.*` lookups (a "find outputs"
-helper appears under §3). Off by default because a browser calling Bitcoin Core directly hits CORS.
+By default the app uses the SDK's built-in `NETWORK_CONFIG` for Sui **devnet**. **Sui devnet is reset
+periodically**, and when it is, those built-in object/package IDs go stale — reads then fail with
+`HashiFetchError` and the app shows a "Can't reach a live Hashi deployment" banner. Point it at a
+live deployment (a fresh devnet deploy, or a local `hashi-localnet`) with a `ref-app/.env`:
+
+```bash
+# ref-app/.env — all optional; unset values fall back to the SDK's NETWORK_CONFIG
+VITE_SUI_NETWORK=devnet                  # devnet | testnet | mainnet | localnet
+VITE_SUI_RPC_URL=http://127.0.0.1:9000   # full-node base URL (e.g. for localnet)
+VITE_HASHI_OBJECT_ID=0x...               # Hashi shared object id
+VITE_HASHI_PACKAGE_ID=0x...              # Hashi package id
+VITE_BITCOIN_NETWORK=signet              # mainnet | testnet | signet | regtest
+VITE_BTC_RPC_URL=http://...              # optional: enables client.hashi.bitcoin.* (a "find outputs" helper under §3)
+```
+
+Restart the dev server after changing `.env`. `VITE_BTC_RPC_URL` is off by default because a browser
+calling Bitcoin Core directly hits CORS.
 
 ## Scope
 

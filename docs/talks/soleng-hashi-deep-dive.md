@@ -65,32 +65,43 @@ Part 1: how Hashi works · Part 2: integrating the TypeScript SDK
 
 ## Architecture overview (the mental model)
 
-```text
-                 +-------------------------------------------+
-                 |   OFF-CHAIN (Rust node services)          |
-                 |  - Committee: MPC threshold Schnorr       |
-                 |    (DKG / rotation / signing), quorum     |
-                 |  - Guardian: enclave 2nd signer / policy  |
-                 |  - gRPC HashiService (stateless)          |
-                 +-------------------------------------------+
-                      ^   watch / sign / broadcast   |
-          notify /    |                              | mint / certs
-          query BTC   |                              v
-  +-----------+   deposit BTC   +--------------------------------+
-  |  Bitcoin  |<--------------->|  SUI (Move on-chain)           |
-  |  network  |   broadcast BTC |  Hashi shared object:          |
-  |  (native  |<----------------|   committee_set / config /     |
-  |   BTC,    |                 |   treasury / proposals,        |
-  |   UTXOs)  |                 |   BitcoinState (UTXO pool),    |
-  +-----------+                 |   deposit + withdrawal queues, |
-        ^                       |   Coin<BTC> (hBTC) treasury    |
-        |  send BTC to taproot  +--------------------------------+
-        |  deposit address               ^  deposit() / request_withdrawal()
-     +------+                             |  receive Coin<BTC> (DeFi)
-     | User |-----------------------------+
-     +------+
-  2-of-2 taproot: guardian leaf + MPC-child both must Schnorr-sign
+```mermaid
+flowchart TB
+  User(["User / dApp<br/>(via @mysten-incubation/hashi SDK)"])
+
+  subgraph OffChain["Off-chain — every committee member runs these (Rust services, stateless)"]
+    Node["Hashi node — orchestrates, broadcasts BTC txns,<br/>exposes gRPC HashiService<br/>crate: hashi"]
+    Monitor["Bitcoin monitor — watches BTC for deposit confirmations<br/>crate: hashi-monitor"]
+    MPC["MPC signer — threshold Schnorr<br/>(DKG, resharing on epoch change, withdrawal signing)"]
+    Screener["Sanctions screener — per-member compliance check at vote time<br/>crate: hashi-screener"]
+  end
+
+  Guardian["Guardian — independent 2nd signer, AWS Nitro enclave<br/>crates: hashi-guardian, hashi-guardian-enclave"]
+
+  BTC[("Bitcoin network<br/>native BTC, UTXOs")]
+
+  subgraph OnChain["Sui — Hashi shared object (Move on-chain, the source of truth)"]
+    Gov["Committee and governance<br/>committee_set · config · mpc_config · threshold · reconfig · proposal · treasury"]
+    BtcState["BTC state and request queues<br/>bitcoin_state · utxo_pool · deposit_queue · withdrawal_queue"]
+    Coin["hBTC token<br/>btc — Coin&lt;BTC&gt;"]
+  end
+
+  %% User-facing flows (SDK calls)
+  User -->|"generateDepositAddress(), then send BTC to the 2-of-2 taproot address"| BTC
+  User -->|"tx.deposit() / tx.requestWithdrawal()"| BtcState
+  User -. "view.* reads (status, config, balance, history)" .-> OnChain
+  Coin -->|"committee mints hBTC → use in DeFi"| User
+
+  %% Committee / guardian operation
+  Monitor -->|"watch deposit confirmations"| BTC
+  BtcState -->|"read deposit / withdrawal queues"| Node
+  Node -->|"submit quorum cert → confirm deposit, mint hBTC"| BtcState
+  MPC -->|"committee Schnorr signature"| Node
+  Guardian -->|"guardian Schnorr signature (2-of-2)"| Node
+  Node -->|"broadcast signed withdrawal tx"| BTC
 ```
+
+**2-of-2 taproot:** `tr(NUMS, multi_a(2, guardian, mpc-child))` — the guardian leaf and the MPC-child must **both** Schnorr-sign to move funds.
 
 <!-- Speaker notes: This is the diagram to leave partners with. Users straddle Bitcoin (broadcast deposit / receive withdrawal) and Sui (notify, withdraw, use hBTC). The Rust committee + guardian services sit in the middle and are deliberately STATELESS — the canonical state lives on Sui in the Hashi shared object (committee set, config, treasury, proposals, the BitcoinState UTXO pool, and the deposit/withdrawal queues). Note: the design docs describe certificates submitted by "one validator/member" and batched txs built by a "leader"; there is no separate standalone relayer role in the docs I read. -->
 

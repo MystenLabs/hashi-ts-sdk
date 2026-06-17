@@ -60,7 +60,7 @@ export function BalanceSection() {
                 </div>
             )}
             <p className="muted small" style={{ marginTop: "0.5rem" }}>
-                Coin type: <span className="mono">{BTC_TYPE}</span>
+                Coin type: <span className="mono">{BTC_TYPE ?? "—"}</span>
             </p>
         </section>
     );

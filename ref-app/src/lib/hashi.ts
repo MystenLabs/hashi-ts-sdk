@@ -1,18 +1,32 @@
 import { useCurrentClient } from "@mysten/dapp-kit-react";
 import { hashi } from "@mysten-incubation/hashi";
 import { useMemo } from "react";
+import {
+  SUI_NETWORK,
+  HASHI_OBJECT_ID,
+  HASHI_PACKAGE_ID,
+  BITCOIN_NETWORK,
+  BTC_RPC_URL,
+} from "./deployment.ts";
 
-/**
- * Optional Bitcoin Core JSON-RPC URL. When set (via a `.env` `VITE_BTC_RPC_URL`),
- * the SDK's `client.hashi.bitcoin.*` lookups become available in the app. Off by
- * default because a browser calling Bitcoin Core directly hits CORS.
- */
-export const BTC_RPC_URL = (import.meta.env.VITE_BTC_RPC_URL as string | undefined) || undefined;
+// Re-export for back-compat with sections that import it from here.
+export { BTC_RPC_URL } from "./deployment.ts";
 
 export function useHashiClient() {
   const client = useCurrentClient();
   return useMemo(
-    () => client.$extend(hashi({ network: "devnet", btcRpcUrl: BTC_RPC_URL })),
+    () =>
+      client.$extend(
+        hashi({
+          network: SUI_NETWORK,
+          // Overrides default to undefined, so the SDK falls back to its built-in
+          // NETWORK_CONFIG for the chosen network when no env override is set.
+          hashiObjectId: HASHI_OBJECT_ID,
+          packageId: HASHI_PACKAGE_ID,
+          bitcoinNetwork: BITCOIN_NETWORK,
+          btcRpcUrl: BTC_RPC_URL,
+        }),
+      ),
     [client],
   );
 }

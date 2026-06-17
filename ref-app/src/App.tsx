@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ConnectButton } from "@mysten/dapp-kit-react/ui";
 import { useCurrentAccount } from "@mysten/dapp-kit-react";
+import { useQuery } from "@tanstack/react-query";
 import { GovernanceSection } from "./sections/GovernanceSection.tsx";
 import { CommitteeSection } from "./sections/CommitteeSection.tsx";
 import { DepositAddressSection } from "./sections/DepositAddressSection.tsx";
@@ -11,6 +12,9 @@ import { RequestWithdrawalSection } from "./sections/RequestWithdrawalSection.ts
 import { CancelWithdrawalSection } from "./sections/CancelWithdrawalSection.tsx";
 import { TransactionHistorySection } from "./sections/TransactionHistorySection.tsx";
 import { ActivityLog } from "./sections/ActivityLog.tsx";
+import { useHashiClient } from "./lib/hashi.ts";
+import { SUI_NETWORK, BITCOIN_NETWORK, HASHI_OBJECT_ID } from "./lib/deployment.ts";
+import { describeError } from "./lib/format.ts";
 import "./App.css";
 
 export function App() {
@@ -21,7 +25,9 @@ export function App() {
             <div className="topbar">
                 <div>
                     <h1>Hashi SDK Reference App</h1>
-                    <div className="sub">@mysten-incubation/hashi · Sui devnet · BTC signet</div>
+                    <div className="sub">
+                        @mysten-incubation/hashi · Sui {SUI_NETWORK} · BTC {BITCOIN_NETWORK}
+                    </div>
                 </div>
                 <ConnectButton />
             </div>
@@ -36,6 +42,8 @@ export function App() {
                     in your browser.
                 </p>
             )}
+
+            <DeploymentBanner />
 
             <div className="guide">
                 <h2>Live demo — the deposit → mint → withdraw happy path</h2>
@@ -74,6 +82,36 @@ export function App() {
             <CancelWithdrawalSection requestId={requestId} setRequestId={setRequestId} />
             <TransactionHistorySection />
             <ActivityLog />
+        </div>
+    );
+}
+
+/**
+ * Shows a clear, actionable banner when the configured Hashi deployment can't be
+ * reached — most commonly because Sui devnet was reset and the built-in IDs went
+ * stale. Shares the ["hashi","view"] query cache with §1/§2, so it adds no extra
+ * fetch.
+ */
+function DeploymentBanner() {
+    const hashiClient = useHashiClient();
+    const { error } = useQuery({
+        queryKey: ["hashi", "view"],
+        queryFn: () => hashiClient.hashi.view.all(),
+    });
+    if (!error) return null;
+    return (
+        <div className="callout callout-warn" style={{ marginBottom: "1.5rem" }}>
+            <strong>Can't reach a live Hashi deployment.</strong> The configured deployment (
+            <span className="mono">{HASHI_OBJECT_ID ?? "(unset)"}</span> on Sui{" "}
+            <code>{SUI_NETWORK}</code>) returned an error. Sui devnet is reset periodically, so
+            previously-deployed object/package IDs go stale. Point the app at a live deployment by
+            setting <code>VITE_SUI_NETWORK</code>, <code>VITE_HASHI_OBJECT_ID</code>,{" "}
+            <code>VITE_HASHI_PACKAGE_ID</code> (and optionally <code>VITE_SUI_RPC_URL</code> /{" "}
+            <code>VITE_BITCOIN_NETWORK</code>) in <code>ref-app/.env</code>, then restart the dev
+            server.
+            <div className="mono small" style={{ marginTop: "0.5rem" }}>
+                {describeError(error)}
+            </div>
         </div>
     );
 }
