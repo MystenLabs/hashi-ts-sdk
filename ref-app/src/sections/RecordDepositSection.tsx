@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useCurrentAccount, useDAppKit } from "@mysten/dapp-kit-react";
 import type { DepositStatus } from "@mysten-incubation/hashi";
 import { useHashiClient } from "../lib/hashi.ts";
 import { useDepositStatus } from "../lib/poll.ts";
 import { useActivity } from "../lib/activity.tsx";
+import { BITCOIN_NETWORK } from "../lib/deployment.ts";
+import { fetchAddressUtxos, pickFundingGroup } from "../lib/mempool.ts";
 import { sats, whenMs, untilMs, describeError, isHex32 } from "../lib/format.ts";
 
 type Row = { id: string; vout: string; amountSats: string };
@@ -47,6 +49,37 @@ export function RecordDepositSection() {
             ),
     });
 
+    // Reuse §3's derived deposit address (same query key → shared cache, reflects
+    // §3's guardian-unprovisioned state without re-deriving here).
+    const { data: depositAddr } = useQuery({
+        queryKey: ["hashi", "depositAddr", account?.address],
+        enabled: !!account?.address,
+        retry: false,
+        queryFn: () => hashiClient.hashi.generateDepositAddress({ suiAddress: account!.address }),
+    });
+
+    // Look up the deposit address's UTXOs on mempool.space and fill the form with
+    // one funding tx (display-order txid + a row per vout). The user reviews, then
+    // submits — see 2026-06-18-ref-app-autofill-deposit-utxos-design.md.
+    const autofill = useMutation({
+        mutationFn: async () => {
+            const utxos = await fetchAddressUtxos(BITCOIN_NETWORK, depositAddr!);
+            return utxos.length === 0 ? { group: null, otherTxCount: 0 } : pickFundingGroup(utxos);
+        },
+        onSuccess: ({ group }) => {
+            if (!group) return;
+            setTxid(`0x${group.txid}`);
+            setRows(
+                group.utxos.map((u) => ({
+                    id: crypto.randomUUID(),
+                    vout: String(u.vout),
+                    amountSats: String(u.value),
+                })),
+            );
+            setRecipient((prev) => prev || account?.address || "");
+        },
+    });
+
     const mutation = useMutation({
         mutationFn: async () => {
             const utxos = filledRows.map((r) => ({
@@ -87,6 +120,44 @@ export function RecordDepositSection() {
                 Calls <code>{`client.hashi.tx.deposit({ txid, utxos, recipient })`}</code> then
                 signs via the connected wallet.
             </p>
+
+            <div className="row" style={{ marginBottom: "0.75rem" }}>
+                <button
+                    type="button"
+                    onClick={() => autofill.mutate()}
+                    disabled={!depositAddr || autofill.isPending}
+                >
+                    {autofill.isPending ? "Looking up…" : "Auto-fill from deposit address"}
+                </button>
+                {!depositAddr && (
+                    <span className="muted small">Derive your address in §3 first.</span>
+                )}
+            </div>
+            {autofill.error && (
+                <p className="err mono" style={{ marginTop: "-0.25rem" }}>
+                    {describeError(autofill.error)}
+                </p>
+            )}
+            {autofill.data && !autofill.data.group && (
+                <p className="muted small" style={{ marginTop: "-0.25rem" }}>
+                    No funds at your deposit address yet — fund it via §3 and wait for it to appear.
+                </p>
+            )}
+            {autofill.data?.group && (
+                <p className="muted small" style={{ marginTop: "-0.25rem" }}>
+                    Filled from tx <code>{autofill.data.group.txid.slice(0, 12)}…</code>{" "}
+                    <span
+                        className={`badge ${autofill.data.group.confirmed ? "badge-ok" : "badge-pending"}`}
+                    >
+                        {autofill.data.group.confirmed ? "confirmed" : "pending confirmation"}
+                    </span>
+                    {autofill.data.otherTxCount > 0 &&
+                        ` — ${autofill.data.otherTxCount} other funding tx${
+                            autofill.data.otherTxCount > 1 ? "s" : ""
+                        } found; submit this one, then re-fetch for the rest.`}
+                </p>
+            )}
+
             <label>Funding txid (display order, 0x-prefixed):</label>
             <input value={txid} onChange={(e) => setTxid(e.target.value)} placeholder="0x…" />
 

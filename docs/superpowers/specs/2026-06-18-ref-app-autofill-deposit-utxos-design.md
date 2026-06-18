@@ -39,14 +39,14 @@ unit-tested in isolation.
 import type { BitcoinNetwork } from "@mysten-incubation/hashi";
 
 export interface MempoolUtxo {
-  txid: string;            // display order (mempool's form), no 0x prefix
+  txid: string; // display order (mempool's form), no 0x prefix
   vout: number;
-  value: number;           // sats
+  value: number; // sats
   status: { confirmed: boolean };
 }
 
 export interface FundingGroup {
-  txid: string;            // display order
+  txid: string; // display order
   confirmed: boolean;
   utxos: { vout: number; value: number }[];
 }
@@ -55,18 +55,16 @@ export interface FundingGroup {
 export function mempoolBase(network: BitcoinNetwork): string | null;
 
 /** GET /address/{addr}/utxo. Throws on unsupported network or HTTP error. */
-export function fetchAddressUtxos(
-  network: BitcoinNetwork,
-  address: string,
-): Promise<MempoolUtxo[]>;
+export function fetchAddressUtxos(network: BitcoinNetwork, address: string): Promise<MempoolUtxo[]>;
 
 /**
  * Group UTXOs by txid; sort confirmed-first then by descending total value.
  * Returns the chosen group plus the count of *other* groups (other funding txs).
  */
-export function pickFundingGroup(
-  utxos: MempoolUtxo[],
-): { group: FundingGroup | null; otherTxCount: number };
+export function pickFundingGroup(utxos: MempoolUtxo[]): {
+  group: FundingGroup | null;
+  otherTxCount: number;
+};
 ```
 
 - `mempoolBase`: `mainnet → "https://mempool.space/api"`,
@@ -89,20 +87,20 @@ export function pickFundingGroup(
      `group.utxos` (`vout`, `amountSats = value`), and fills `recipient` with the
      connected address if empty.
 - Show a result line: which tx was filled (confirmed/pending badge) and, if
-  `otherTxCount > 0`, *"N other funding tx(s) found — submit this one, then
-  re-fetch for the rest."*
+  `otherTxCount > 0`, _"N other funding tx(s) found — submit this one, then
+  re-fetch for the rest."_
 
 ## States
 
-| State | UI |
-| --- | --- |
-| address not yet derived | button disabled (guardian-unprovisioned reuses §3's existing notice) |
-| loading | button shows "Looking up…" |
-| no UTXOs | "No funds at your deposit address yet — fund it via §3 and wait for it to appear." |
-| filled (confirmed) | green badge + summary |
-| filled (unconfirmed) | "pending confirmation" note (committee needs confirmations before it approves) |
-| fetch error | error line via `describeError` |
-| regtest | "Auto-fill needs a public explorer; not available on regtest. Enter values manually or set VITE_BTC_RPC_URL for the §3 RPC lookup." |
+| State                   | UI                                                                                                                                  |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| address not yet derived | button disabled (guardian-unprovisioned reuses §3's existing notice)                                                                |
+| loading                 | button shows "Looking up…"                                                                                                          |
+| no UTXOs                | "No funds at your deposit address yet — fund it via §3 and wait for it to appear."                                                  |
+| filled (confirmed)      | green badge + summary                                                                                                               |
+| filled (unconfirmed)    | "pending confirmation" note (committee needs confirmations before it approves)                                                      |
+| fetch error             | error line via `describeError`                                                                                                      |
+| regtest                 | "Auto-fill needs a public explorer; not available on regtest. Enter values manually or set VITE_BTC_RPC_URL for the §3 RPC lookup." |
 
 ## Non-destructive
 
@@ -112,10 +110,11 @@ manually chosen recipient.
 
 ## Testing
 
-- Unit-test `lib/mempool.ts` pure functions (`mempoolBase`, `pickFundingGroup`)
-  with vitest: grouping, confirmed-first ordering, empty input, regtest → null.
-  `fetchAddressUtxos`'s network call is not unit-tested (no SDK/integration
-  surface); the pure grouping logic is where the risk is.
+The ref-app is **not a workspace test target** (CLAUDE.md) and ships no test
+runner, so we do not stand up vitest just for this helper. Instead:
+
+- Keep `lib/mempool.ts` small and pure so it's correct by inspection.
+- Typecheck via `pnpm --filter ref-app build` (`tsc --noEmit`).
 - Manual: connect dev-wallet on devnet, derive §3 address, fund via
   signet257.bublina.eu.org, click auto-fill, confirm §4 populates, submit.
 

@@ -44,10 +44,12 @@ pattern; the `Signer`-based direct methods are for backend/script use).
 ## Funding the deposit address
 
 The deposit flow needs real signet BTC funding the derived 2-of-2 P2TR address. Use any signet faucet
-(e.g. https://signetfaucet.com). After confirmation, paste the funding `txid` (display order — the
-form mempool.space shows) and vout(s) into §4. Address derivation (§3) requires the deployment to
-have published `guardian_btc_public_key`; until then the SDK throws `HashiConfigError` and the app
-shows a "guardian not provisioned" notice.
+(e.g. https://signet257.bublina.eu.org). After confirmation, either click **"Auto-fill from deposit
+address"** in §4 — it looks up the address's UTXOs on mempool.space and fills `txid`/vout(s)/amounts
+for one funding tx — or paste the funding `txid` (display order, the form mempool.space shows) and
+vout(s) by hand. Address derivation (§3) requires the deployment to have published
+`guardian_btc_public_key`; until then the SDK throws `HashiConfigError` and the app shows a "guardian
+not provisioned" notice.
 
 ## Configuration / pointing at a live deployment
 
