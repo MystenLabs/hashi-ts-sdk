@@ -6,7 +6,7 @@ import { useHashiClient } from "../lib/hashi.ts";
 import { useDepositStatus } from "../lib/poll.ts";
 import { useActivity } from "../lib/activity.tsx";
 import { BITCOIN_NETWORK } from "../lib/deployment.ts";
-import { fetchAddressUtxos, pickFundingGroup } from "../lib/mempool.ts";
+import { fetchAddressUtxos, mempoolBase, pickFundingGroup } from "../lib/mempool.ts";
 import { sats, whenMs, untilMs, describeError, isHex32 } from "../lib/format.ts";
 
 type Row = { id: string; vout: string; amountSats: string };
@@ -106,6 +106,15 @@ export function RecordDepositSection() {
     const canSubmit =
         !!account && txidValid && recipientValid && filledRows.length > 0 && !mutation.isPending;
 
+    // Native-tooltip text explaining what the auto-fill button does — shows the
+    // exact mempool.space REST call (the `curl` equivalent) once the §3 address
+    // has resolved, so the lookup isn't a black box.
+    const autofillBase = mempoolBase(BITCOIN_NETWORK);
+    const autofillHint =
+        depositAddr && autofillBase
+            ? `Looks up the UTXOs paying your §3 deposit address on mempool.space and fills the txid, vout(s) and amounts for one funding tx. Equivalent to:\n\ncurl ${autofillBase}/address/${depositAddr}/utxo`
+            : "Looks up the UTXOs paying your §3 deposit address on mempool.space and fills the form. Derive your address in §3 first.";
+
     const update = (id: string, field: "vout" | "amountSats", value: string) =>
         setRows(rows.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
     const addRow = () => setRows([...rows, newRow()]);
@@ -124,6 +133,7 @@ export function RecordDepositSection() {
             <div className="row" style={{ marginBottom: "0.75rem" }}>
                 <button
                     type="button"
+                    title={autofillHint}
                     onClick={() => autofill.mutate()}
                     disabled={!depositAddr || autofill.isPending}
                 >
