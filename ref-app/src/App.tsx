@@ -55,8 +55,8 @@ export function App() {
                     <li>
                         §3 derive your unique taproot deposit address, then fund it with signet BTC
                         (e.g.{" "}
-                        <a href="https://signetfaucet.com" target="_blank" rel="noreferrer">
-                            signetfaucet.com
+                        <a href="https://signet257.bublina.eu.org/" target="_blank" rel="noreferrer">
+                            signet257.bublina.eu.org
                         </a>
                         ).
                     </li>
