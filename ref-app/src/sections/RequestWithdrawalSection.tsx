@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useCurrentAccount, useDAppKit } from "@mysten/dapp-kit-react";
 import { bitcoinAddressToWitnessProgram } from "@mysten-incubation/hashi";
 import type { WithdrawalStatus } from "@mysten-incubation/hashi";
@@ -54,6 +54,32 @@ export function RequestWithdrawalSection({
         },
     });
 
+    // Reuse §3's derived deposit address and §5's balance (same query keys →
+    // shared caches) to auto-fill a round-trip withdrawal back to yourself.
+    const { data: depositAddr } = useQuery({
+        queryKey: ["hashi", "depositAddr", account?.address],
+        enabled: !!account?.address,
+        retry: false,
+        queryFn: () => hashiClient.hashi.generateDepositAddress({ suiAddress: account!.address }),
+    });
+    const { data: balance } = useQuery({
+        queryKey: ["hashi", "balance", account?.address],
+        enabled: !!account?.address,
+        queryFn: () => hashiClient.hashi.view.balance(account!.address),
+    });
+
+    const canAutofill = !!depositAddr && !!balance && balance.totalBalance > 0n;
+    const autofill = () => {
+        if (!depositAddr || !balance) return;
+        setBitcoinAddress(depositAddr);
+        setAmountSats(balance.totalBalance.toString());
+    };
+    const autofillHint = canAutofill
+        ? `Fills the destination with your own §3 deposit address (${depositAddr}) and the amount with your full §5 hBTC balance (${sats(balance.totalBalance)}) — a round-trip withdrawal back to yourself. Edit either field before submitting.`
+        : !depositAddr
+          ? "Derive your address in §3 first."
+          : "No hBTC balance to withdraw yet — complete a deposit (§4) and wait for it to confirm (§5).";
+
     return (
         <section className="section">
             <h2>
@@ -63,6 +89,15 @@ export function RequestWithdrawalSection({
                 Calls <code>{`client.hashi.tx.requestWithdrawal({ amount, bitcoinAddress })`}</code>{" "}
                 then signs via the connected wallet.
             </p>
+
+            <div className="row" style={{ marginBottom: "0.75rem" }}>
+                <span className="tip">
+                    <button type="button" onClick={autofill} disabled={!canAutofill}>
+                        Auto-fill round-trip withdrawal
+                    </button>
+                    <span className="tip-body mono">{autofillHint}</span>
+                </span>
+            </div>
 
             <label>
                 Destination Bitcoin address (bech32 P2WPKH or bech32m P2TR, {BITCOIN_NETWORK}):
