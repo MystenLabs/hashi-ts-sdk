@@ -28,7 +28,6 @@ Open http://localhost:5173.
 | 7   | Request a withdrawal     | `client.hashi.tx.requestWithdrawal(...)` + sign, `view.withdrawalStatus(...)` polling               |
 | 8   | Cancel a withdrawal      | `client.hashi.tx.cancelWithdrawal(...)` + sign                                                      |
 | 9   | Transaction history      | `client.hashi.view.transactionHistory(address)`                                                     |
-| 10  | Activity log             | (in-memory)                                                                                         |
 
 The deposit/withdrawal status panels poll `view.depositStatus` / `view.withdrawalStatus`; the
 imperative one-shot equivalents are `client.hashi.waitForDeposit` / `waitForWithdrawal`.

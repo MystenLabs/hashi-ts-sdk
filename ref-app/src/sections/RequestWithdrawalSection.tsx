@@ -5,7 +5,6 @@ import { bitcoinAddressToWitnessProgram } from "@mysten-incubation/hashi";
 import type { WithdrawalStatus } from "@mysten-incubation/hashi";
 import { useHashiClient } from "../lib/hashi.ts";
 import { useWithdrawalStatus } from "../lib/poll.ts";
-import { useActivity } from "../lib/activity.tsx";
 import { BITCOIN_NETWORK } from "../lib/btc-type.ts";
 import { TipButton } from "../lib/TipButton.tsx";
 import { sats, describeError } from "../lib/format.ts";
@@ -29,7 +28,6 @@ export function RequestWithdrawalSection({
     const account = useCurrentAccount();
     const dAppKit = useDAppKit();
     const hashiClient = useHashiClient();
-    const { push } = useActivity();
 
     const [bitcoinAddress, setBitcoinAddress] = useState("");
     const [amountSats, setAmountSats] = useState("");
@@ -47,11 +45,9 @@ export function RequestWithdrawalSection({
         },
         onSuccess: (r) => {
             setDigest(r.digest ?? null);
-            push({ kind: "withdrawal-request", status: "success", digest: r.digest });
         },
-        onError: (err) => {
+        onError: () => {
             setDigest(null);
-            push({ kind: "withdrawal-request", status: "failed", error: describeError(err) });
         },
     });
 

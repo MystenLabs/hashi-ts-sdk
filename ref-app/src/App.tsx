@@ -11,7 +11,6 @@ import { FeesSection } from "./sections/FeesSection.tsx";
 import { RequestWithdrawalSection } from "./sections/RequestWithdrawalSection.tsx";
 import { CancelWithdrawalSection } from "./sections/CancelWithdrawalSection.tsx";
 import { TransactionHistorySection } from "./sections/TransactionHistorySection.tsx";
-import { ActivityLog } from "./sections/ActivityLog.tsx";
 import { useHashiClient } from "./lib/hashi.ts";
 import { SUI_NETWORK, BITCOIN_NETWORK, HASHI_OBJECT_ID } from "./lib/deployment.ts";
 import { describeError } from "./lib/format.ts";
@@ -55,7 +54,11 @@ export function App() {
                     <li>
                         §3 derive your unique taproot deposit address, then fund it with signet BTC
                         (e.g.{" "}
-                        <a href="https://signet257.bublina.eu.org/" target="_blank" rel="noreferrer">
+                        <a
+                            href="https://signet257.bublina.eu.org/"
+                            target="_blank"
+                            rel="noreferrer"
+                        >
                             signet257.bublina.eu.org
                         </a>
                         ).
@@ -81,7 +84,6 @@ export function App() {
             <RequestWithdrawalSection onRequestCreated={setRequestId} />
             <CancelWithdrawalSection requestId={requestId} setRequestId={setRequestId} />
             <TransactionHistorySection />
-            <ActivityLog />
         </div>
     );
 }

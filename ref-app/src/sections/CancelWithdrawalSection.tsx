@@ -1,7 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { useCurrentAccount, useDAppKit } from "@mysten/dapp-kit-react";
 import { useHashiClient } from "../lib/hashi.ts";
-import { useActivity } from "../lib/activity.tsx";
 import { TipButton } from "../lib/TipButton.tsx";
 import { describeError } from "../lib/format.ts";
 
@@ -27,7 +26,6 @@ export function CancelWithdrawalSection({
     const account = useCurrentAccount();
     const dAppKit = useDAppKit();
     const hashiClient = useHashiClient();
-    const { push } = useActivity();
 
     const mutation = useMutation({
         mutationFn: async () => {
@@ -39,9 +37,6 @@ export function CancelWithdrawalSection({
             const res = await dAppKit.signAndExecuteTransaction({ transaction });
             return extractTxBody(res);
         },
-        onSuccess: (r) => push({ kind: "withdrawal-cancel", status: "success", digest: r.digest }),
-        onError: (err) =>
-            push({ kind: "withdrawal-cancel", status: "failed", error: describeError(err) }),
     });
 
     return (

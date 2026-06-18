@@ -4,7 +4,6 @@ import { useCurrentAccount, useDAppKit } from "@mysten/dapp-kit-react";
 import type { DepositStatus } from "@mysten-incubation/hashi";
 import { useHashiClient } from "../lib/hashi.ts";
 import { useDepositStatus } from "../lib/poll.ts";
-import { useActivity } from "../lib/activity.tsx";
 import { BITCOIN_NETWORK } from "../lib/deployment.ts";
 import { TipButton } from "../lib/TipButton.tsx";
 import { fetchAddressUtxos, mempoolBase, pickFundingGroup } from "../lib/mempool.ts";
@@ -28,7 +27,6 @@ export function RecordDepositSection() {
     const account = useCurrentAccount();
     const dAppKit = useDAppKit();
     const hashiClient = useHashiClient();
-    const { push } = useActivity();
 
     const [txid, setTxid] = useState("0x");
     const [recipient, setRecipient] = useState("");
@@ -93,11 +91,9 @@ export function RecordDepositSection() {
         },
         onSuccess: (r) => {
             setDigest(r.digest ?? null);
-            push({ kind: "deposit", status: "success", digest: r.digest });
         },
-        onError: (err) => {
+        onError: () => {
             setDigest(null);
-            push({ kind: "deposit", status: "failed", error: describeError(err) });
         },
     });
 
