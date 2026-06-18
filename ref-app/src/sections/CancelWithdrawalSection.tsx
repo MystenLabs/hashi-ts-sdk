@@ -2,6 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useCurrentAccount, useDAppKit } from "@mysten/dapp-kit-react";
 import { useHashiClient } from "../lib/hashi.ts";
 import { useActivity } from "../lib/activity.tsx";
+import { TipButton } from "../lib/TipButton.tsx";
 import { describeError } from "../lib/format.ts";
 
 function extractTxBody(res: unknown): { digest?: string } {
@@ -66,12 +67,13 @@ export function CancelWithdrawalSection({
             />
 
             <div className="row" style={{ marginTop: "1rem" }}>
-                <button
+                <TipButton
+                    tip="Build tx.cancelWithdrawal for this requestId, sign with your wallet, and submit. Only the requester can cancel, while Requested/Approved and after the cooldown."
                     onClick={() => mutation.mutate()}
                     disabled={mutation.isPending || !requestId || !account}
                 >
                     {mutation.isPending ? "Submitting…" : "Cancel withdrawal"}
-                </button>
+                </TipButton>
             </div>
 
             {mutation.error && (

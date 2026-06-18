@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useCurrentAccount } from "@mysten/dapp-kit-react";
 import { useHashiClient } from "../lib/hashi.ts";
+import { TipButton } from "../lib/TipButton.tsx";
 import { sats, mist, describeError } from "../lib/format.ts";
 
 export function FeesSection() {
@@ -30,9 +31,13 @@ export function FeesSection() {
                 <code>view.withdrawalFees(sender)</code>
             </p>
             <div className="row">
-                <button onClick={() => refetch()} disabled={isFetching || !sender}>
+                <TipButton
+                    tip="Dry-run deposit gas and withdrawal fees via view.depositGasEstimate() and view.withdrawalFees()."
+                    onClick={() => refetch()}
+                    disabled={isFetching || !sender}
+                >
                     {isFetching ? "Estimating…" : "Estimate"}
-                </button>
+                </TipButton>
             </div>
             {!sender && (
                 <p className="muted" style={{ marginTop: "0.5rem" }}>

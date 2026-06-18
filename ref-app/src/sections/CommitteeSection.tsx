@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useHashiClient } from "../lib/hashi.ts";
+import { TipButton } from "../lib/TipButton.tsx";
 import { hex, describeError } from "../lib/format.ts";
 
 export function CommitteeSection() {
@@ -28,7 +29,8 @@ export function CommitteeSection() {
                 <code>view.all()</code>
             </p>
             <div className="row">
-                <button
+                <TipButton
+                    tip="Re-read the MPC committee key and guardian config via view.mpcPublicKey() and view.all()."
                     onClick={() => {
                         mpc.refetch();
                         cfg.refetch();
@@ -36,7 +38,7 @@ export function CommitteeSection() {
                     disabled={busy}
                 >
                     {busy ? "Refreshing…" : "Refresh"}
-                </button>
+                </TipButton>
                 {cfg.data && (
                     <span className={`badge ${guardianProvisioned ? "badge-ok" : "badge-warn"}`}>
                         {guardianProvisioned ? "guardian provisioned" : "guardian not provisioned"}

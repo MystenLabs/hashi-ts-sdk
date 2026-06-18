@@ -1,4 +1,5 @@
 import { useActivity } from "../lib/activity.tsx";
+import { TipButton } from "../lib/TipButton.tsx";
 import { truncateAddr } from "../lib/format.ts";
 
 const KIND_LABEL: Record<string, string> = {
@@ -17,9 +18,13 @@ export function ActivityLog() {
             <p className="calls">In-memory ring buffer (last 10 results).</p>
             <div className="row" style={{ justifyContent: "space-between" }}>
                 <span className="muted">{entries.length} entries</span>
-                <button onClick={clear} disabled={entries.length === 0}>
+                <TipButton
+                    tip="Clear this session's in-memory activity log."
+                    onClick={clear}
+                    disabled={entries.length === 0}
+                >
                     Clear
-                </button>
+                </TipButton>
             </div>
             {entries.length === 0 ? (
                 <p className="muted" style={{ marginTop: "1rem" }}>

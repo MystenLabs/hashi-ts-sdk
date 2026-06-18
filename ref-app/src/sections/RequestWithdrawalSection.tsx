@@ -7,6 +7,7 @@ import { useHashiClient } from "../lib/hashi.ts";
 import { useWithdrawalStatus } from "../lib/poll.ts";
 import { useActivity } from "../lib/activity.tsx";
 import { BITCOIN_NETWORK } from "../lib/btc-type.ts";
+import { TipButton } from "../lib/TipButton.tsx";
 import { sats, describeError } from "../lib/format.ts";
 
 /** Pull the digest out of the dapp-kit execution result (which carries no events). */
@@ -91,12 +92,15 @@ export function RequestWithdrawalSection({
             </p>
 
             <div className="row" style={{ marginBottom: "0.75rem" }}>
-                <span className="tip">
-                    <button type="button" onClick={autofill} disabled={!canAutofill}>
-                        Auto-fill round-trip withdrawal
-                    </button>
-                    <span className="tip-body mono">{autofillHint}</span>
-                </span>
+                <TipButton
+                    tip={autofillHint}
+                    mono
+                    type="button"
+                    onClick={autofill}
+                    disabled={!canAutofill}
+                >
+                    Auto-fill round-trip withdrawal
+                </TipButton>
             </div>
 
             <label>
@@ -116,13 +120,14 @@ export function RequestWithdrawalSection({
             />
 
             <div className="row" style={{ marginTop: "1rem" }}>
-                <button
+                <TipButton
+                    tip="Build tx.requestWithdrawal, sign with your wallet, and submit the withdrawal request to the committee."
                     className="primary"
                     onClick={() => mutation.mutate()}
                     disabled={mutation.isPending || !account}
                 >
                     {mutation.isPending ? "Submitting…" : "Request withdrawal"}
-                </button>
+                </TipButton>
             </div>
             {!account && (
                 <p className="muted" style={{ marginTop: "0.5rem" }}>
@@ -195,9 +200,13 @@ function WithdrawalStatusTracker({
                 <span className={`badge ${withdrawalBadge(data?.status)}`}>
                     {data?.status ?? (isFetching ? "…" : "unknown")}
                 </span>
-                <button onClick={() => refetch()} disabled={isFetching}>
+                <TipButton
+                    tip="Re-poll view.withdrawalStatus(digest) for the latest lifecycle state."
+                    onClick={() => refetch()}
+                    disabled={isFetching}
+                >
                     {isFetching ? "Refreshing…" : "Refresh"}
-                </button>
+                </TipButton>
             </div>
             <p className="muted small" style={{ marginTop: "0.5rem" }}>
                 Lifecycle: Requested → Approved → Processing → Signed → Confirmed

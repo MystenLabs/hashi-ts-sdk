@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCurrentAccount } from "@mysten/dapp-kit-react";
 import type { TransactionHistoryItem } from "@mysten-incubation/hashi";
 import { useHashiClient } from "../lib/hashi.ts";
+import { TipButton } from "../lib/TipButton.tsx";
 import { sats, whenMs, truncateAddr, describeError } from "../lib/format.ts";
 
 export function TransactionHistorySection() {
@@ -24,9 +25,13 @@ export function TransactionHistorySection() {
                 Calls <code>client.hashi.view.transactionHistory(address)</code>
             </p>
             <div className="row">
-                <button onClick={() => refetch()} disabled={isFetching || !address}>
+                <TipButton
+                    tip="Re-read your unified deposit + withdrawal history via view.transactionHistory(address)."
+                    onClick={() => refetch()}
+                    disabled={isFetching || !address}
+                >
                     {isFetching ? "Loading…" : "Refresh"}
-                </button>
+                </TipButton>
             </div>
             {!address && (
                 <p className="muted" style={{ marginTop: "0.5rem" }}>

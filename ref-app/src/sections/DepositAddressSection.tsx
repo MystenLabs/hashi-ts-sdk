@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCurrentAccount } from "@mysten/dapp-kit-react";
 import { HashiConfigError } from "@mysten-incubation/hashi";
 import { useHashiClient, BTC_RPC_URL } from "../lib/hashi.ts";
+import { TipButton } from "../lib/TipButton.tsx";
 import { describeError } from "../lib/format.ts";
 
 export function DepositAddressSection() {
@@ -45,9 +46,13 @@ export function DepositAddressSection() {
                 ), wait for confirmation, then record the funding tx in §4.
             </p>
             <div className="row">
-                <button onClick={() => refetch()} disabled={isFetching}>
+                <TipButton
+                    tip="Re-derive your unique P2TR deposit address via generateDepositAddress({ suiAddress })."
+                    onClick={() => refetch()}
+                    disabled={isFetching}
+                >
                     {isFetching ? "Deriving…" : "Refresh"}
-                </button>
+                </TipButton>
             </div>
             {error && (
                 <div className="callout callout-warn">
@@ -60,7 +65,12 @@ export function DepositAddressSection() {
                 <div style={{ marginTop: "1rem" }}>
                     <div className="mono addr-box">{data}</div>
                     <div className="row" style={{ marginTop: "0.5rem" }}>
-                        <button onClick={() => navigator.clipboard.writeText(data)}>Copy</button>
+                        <TipButton
+                            tip="Copy your deposit address to the clipboard."
+                            onClick={() => navigator.clipboard.writeText(data)}
+                        >
+                            Copy
+                        </TipButton>
                         <a
                             href={`https://mempool.space/signet/address/${data}`}
                             target="_blank"
@@ -96,9 +106,13 @@ function BtcRpcLookup({ depositAddress }: { depositAddress: string }) {
             <label>Funding txid</label>
             <input value={txid} onChange={(e) => setTxid(e.target.value)} placeholder="txid" />
             <div className="row" style={{ marginTop: "0.5rem" }}>
-                <button onClick={() => refetch()} disabled={!txid || isFetching}>
+                <TipButton
+                    tip="Scan the given txid for outputs paying this address via bitcoin.lookupAllVouts (requires VITE_BTC_RPC_URL)."
+                    onClick={() => refetch()}
+                    disabled={!txid || isFetching}
+                >
                     {isFetching ? "Looking up…" : "Look up vouts"}
-                </button>
+                </TipButton>
             </div>
             {error && <p className="err">{describeError(error)}</p>}
             {data && (

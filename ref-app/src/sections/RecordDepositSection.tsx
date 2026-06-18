@@ -6,6 +6,7 @@ import { useHashiClient } from "../lib/hashi.ts";
 import { useDepositStatus } from "../lib/poll.ts";
 import { useActivity } from "../lib/activity.tsx";
 import { BITCOIN_NETWORK } from "../lib/deployment.ts";
+import { TipButton } from "../lib/TipButton.tsx";
 import { fetchAddressUtxos, mempoolBase, pickFundingGroup } from "../lib/mempool.ts";
 import { sats, whenMs, untilMs, elapsed, describeError, isHex32 } from "../lib/format.ts";
 
@@ -131,16 +132,15 @@ export function RecordDepositSection() {
             </p>
 
             <div className="row" style={{ marginBottom: "0.75rem" }}>
-                <span className="tip">
-                    <button
-                        type="button"
-                        onClick={() => autofill.mutate()}
-                        disabled={!depositAddr || autofill.isPending}
-                    >
-                        {autofill.isPending ? "Looking up…" : "Auto-fill from deposit address"}
-                    </button>
-                    <span className="tip-body mono">{autofillHint}</span>
-                </span>
+                <TipButton
+                    tip={autofillHint}
+                    mono
+                    type="button"
+                    onClick={() => autofill.mutate()}
+                    disabled={!depositAddr || autofill.isPending}
+                >
+                    {autofill.isPending ? "Looking up…" : "Auto-fill from deposit address"}
+                </TipButton>
                 {!depositAddr && (
                     <span className="muted small">Derive your address in §3 first.</span>
                 )}
@@ -188,19 +188,32 @@ export function RecordDepositSection() {
                         placeholder="amountSats"
                     />
                     {rows.length > 1 && (
-                        <button onClick={() => removeRow(r.id)} type="button">
+                        <TipButton
+                            tip="Remove this UTXO row."
+                            onClick={() => removeRow(r.id)}
+                            type="button"
+                        >
                             ×
-                        </button>
+                        </TipButton>
                     )}
                 </div>
             ))}
             <div className="row" style={{ marginTop: "0.4rem" }}>
-                <button onClick={addRow} type="button">
+                <TipButton
+                    tip="Add another output (vout) from the same funding tx."
+                    onClick={addRow}
+                    type="button"
+                >
                     + Add output
-                </button>
-                <button onClick={() => usageCheck.mutate()} type="button" disabled={!canCheck}>
+                </TipButton>
+                <TipButton
+                    tip="Check whether these outpoints are already recorded on-chain via view.findUsedUtxos() before submitting."
+                    onClick={() => usageCheck.mutate()}
+                    type="button"
+                    disabled={!canCheck}
+                >
                     {usageCheck.isPending ? "Checking…" : "Check if UTXOs already used"}
-                </button>
+                </TipButton>
             </div>
 
             {usageCheck.error && (
@@ -240,9 +253,14 @@ export function RecordDepositSection() {
             />
 
             <div className="row" style={{ marginTop: "1rem" }}>
-                <button className="primary" onClick={() => mutation.mutate()} disabled={!canSubmit}>
+                <TipButton
+                    tip="Build tx.deposit, sign with your wallet, and record the UTXO(s) on Sui as a pending deposit."
+                    className="primary"
+                    onClick={() => mutation.mutate()}
+                    disabled={!canSubmit}
+                >
                     {mutation.isPending ? "Submitting…" : "Submit deposit"}
-                </button>
+                </TipButton>
                 {account && !recipientValid && (
                     <span className="muted small">Enter a 0x-prefixed 32-byte Sui address.</span>
                 )}
@@ -321,9 +339,13 @@ function DepositStatusTracker({ digest }: { digest: string }) {
                             : `waiting ${elapsed(now - startedAt)}`}
                     </span>
                 )}
-                <button onClick={() => refetch()} disabled={isFetching}>
+                <TipButton
+                    tip="Re-poll view.depositStatus(digest) for the latest deposit state."
+                    onClick={() => refetch()}
+                    disabled={isFetching}
+                >
                     {isFetching ? "Refreshing…" : "Refresh"}
-                </button>
+                </TipButton>
             </div>
             {error && <p className="err">{describeError(error)}</p>}
             {data && (

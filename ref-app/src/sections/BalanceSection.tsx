@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useCurrentAccount } from "@mysten/dapp-kit-react";
 import { useHashiClient } from "../lib/hashi.ts";
+import { TipButton } from "../lib/TipButton.tsx";
 import { BTC_TYPE } from "../lib/btc-type.ts";
 import { sats, btc, describeError } from "../lib/format.ts";
 
@@ -41,9 +42,13 @@ export function BalanceSection() {
                 Calls <code>client.hashi.view.balance(owner)</code>
             </p>
             <div className="row">
-                <button onClick={() => refetch()} disabled={isFetching}>
+                <TipButton
+                    tip="Re-read your hBTC balance via view.balance(owner)."
+                    onClick={() => refetch()}
+                    disabled={isFetching}
+                >
                     {isFetching ? "Loading…" : "Refresh"}
-                </button>
+                </TipButton>
             </div>
             {error && (
                 <p className="err" style={{ marginTop: "0.75rem" }}>

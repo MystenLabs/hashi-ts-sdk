@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useHashiClient } from "../lib/hashi.ts";
+import { TipButton } from "../lib/TipButton.tsx";
 import { sats, describeError } from "../lib/format.ts";
 
 export function GovernanceSection() {
@@ -18,9 +19,13 @@ export function GovernanceSection() {
                 Calls <code>client.hashi.view.all()</code>
             </p>
             <div className="row">
-                <button onClick={() => refetch()} disabled={isFetching}>
+                <TipButton
+                    tip="Re-read all protocol config and pause state via view.all()."
+                    onClick={() => refetch()}
+                    disabled={isFetching}
+                >
                     {isFetching ? "Refreshing…" : "Refresh"}
-                </button>
+                </TipButton>
                 {data && (
                     <span className={`badge ${data.paused ? "badge-err" : "badge-ok"}`}>
                         {data.paused ? "paused" : "live"}
