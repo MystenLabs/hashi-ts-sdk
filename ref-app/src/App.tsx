@@ -47,7 +47,7 @@ export function App() {
 
             <div className="guide">
                 <h2>Live demo — the deposit → mint → withdraw happy path</h2>
-                <ol>
+                <ul>
                     <li>
                         Connect a wallet (dev-wallet creates a devnet key in-browser, no extension
                         needed).
@@ -69,7 +69,7 @@ export function App() {
                         §7 request a withdrawal to a signet address and track its lifecycle — or §8
                         cancel while still pending.
                     </li>
-                </ol>
+                </ul>
             </div>
 
             <GovernanceSection />
