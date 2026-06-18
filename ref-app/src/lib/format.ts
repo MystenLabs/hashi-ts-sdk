@@ -38,6 +38,17 @@ export function untilMs(target: bigint | number, now: number = Date.now()): stri
   return `in ${s}s`;
 }
 
+/** Format an elapsed duration (ms) as "45s" / "2m 13s" / "1h 4m 9s". */
+export function elapsed(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
 /** Format a MIST amount with an approximate SUI value. */
 export function mist(amount: bigint): string {
   const sui = Number(amount) / 1e9;

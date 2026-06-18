@@ -242,6 +242,39 @@ code {
     color: #1e40af;
 }
 
+/* Instant hover tooltip — wraps a trigger; .tip-body shows on hover with no
+   browser delay (unlike the native title attribute), and works even when the
+   wrapped control is disabled. */
+.tip {
+    position: relative;
+    display: inline-flex;
+}
+.tip-body {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0;
+    z-index: 20;
+    width: max-content;
+    max-width: 340px;
+    padding: 0.5rem 0.65rem;
+    background: #1e293b;
+    color: #e2e8f0;
+    border-radius: 6px;
+    font-size: 0.72rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-all;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.08s ease;
+    pointer-events: none;
+}
+.tip:hover .tip-body {
+    opacity: 1;
+    visibility: visible;
+}
+
 /* Inline subpanel (e.g. status trackers nested in a section) */
 .subpanel {
     margin-top: 1rem;

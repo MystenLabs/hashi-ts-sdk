@@ -7,7 +7,7 @@ import { useDepositStatus } from "../lib/poll.ts";
 import { useActivity } from "../lib/activity.tsx";
 import { BITCOIN_NETWORK } from "../lib/deployment.ts";
 import { fetchAddressUtxos, mempoolBase, pickFundingGroup } from "../lib/mempool.ts";
-import { sats, whenMs, untilMs, describeError, isHex32 } from "../lib/format.ts";
+import { sats, whenMs, untilMs, elapsed, describeError, isHex32 } from "../lib/format.ts";
 
 type Row = { id: string; vout: string; amountSats: string };
 const newRow = (vout = ""): Row => ({ id: crypto.randomUUID(), vout, amountSats: "" });
@@ -131,14 +131,16 @@ export function RecordDepositSection() {
             </p>
 
             <div className="row" style={{ marginBottom: "0.75rem" }}>
-                <button
-                    type="button"
-                    title={autofillHint}
-                    onClick={() => autofill.mutate()}
-                    disabled={!depositAddr || autofill.isPending}
-                >
-                    {autofill.isPending ? "Looking up…" : "Auto-fill from deposit address"}
-                </button>
+                <span className="tip">
+                    <button
+                        type="button"
+                        onClick={() => autofill.mutate()}
+                        disabled={!depositAddr || autofill.isPending}
+                    >
+                        {autofill.isPending ? "Looking up…" : "Auto-fill from deposit address"}
+                    </button>
+                    <span className="tip-body mono">{autofillHint}</span>
+                </span>
                 {!depositAddr && (
                     <span className="muted small">Derive your address in §3 first.</span>
                 )}
@@ -286,11 +288,18 @@ function depositBadge(status?: DepositStatus): string {
 function DepositStatusTracker({ digest }: { digest: string }) {
     const { data, error, isFetching, refetch } = useDepositStatus(digest);
     const [now, setNow] = useState(() => Date.now());
+    // When this tracker first appeared (deposit just recorded) — the baseline for
+    // the "waiting" elapsed timer.
+    const [startedAt] = useState(() => Date.now());
 
     useEffect(() => {
         const t = setInterval(() => setNow(Date.now()), 1000);
         return () => clearInterval(t);
     }, []);
+
+    // Keep counting until the deposit reaches a terminal state. `confirmableAtMs`
+    // (when present) gives a real ETA; otherwise we show elapsed wait time.
+    const waiting = data == null || (data.status !== "confirmed" && data.status !== "expired");
 
     return (
         <div className="subpanel">
@@ -304,6 +313,14 @@ function DepositStatusTracker({ digest }: { digest: string }) {
                 <span className={`badge ${depositBadge(data?.status)}`}>
                     {data?.status ?? (isFetching ? "…" : "unknown")}
                 </span>
+                {waiting && (
+                    <span className="muted small" title="Time spent waiting for confirmation">
+                        ⏳{" "}
+                        {data?.confirmableAtMs != null
+                            ? `confirmable ${untilMs(data.confirmableAtMs, now)}`
+                            : `waiting ${elapsed(now - startedAt)}`}
+                    </span>
+                )}
                 <button onClick={() => refetch()} disabled={isFetching}>
                     {isFetching ? "Refreshing…" : "Refresh"}
                 </button>
