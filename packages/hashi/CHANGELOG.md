@@ -1,5 +1,11 @@
 # @mysten-incubation/hashi
 
+## 0.3.1
+
+### Patch Changes
+
+- 0af8dfa: Derive Bitcoin deposit addresses with Hashi's delayed MPC recovery taproot leaf.
+
 ## 0.3.0
 
 ### Minor Changes
