@@ -106,7 +106,7 @@ export function RequestWithdrawalSection({
                     onClick={autofill}
                     disabled={!canAutofill}
                 >
-                    Auto-fill round-trip withdrawal
+                    Auto-fill min withdrawal to yourself
                 </TipButton>
             </div>
 
