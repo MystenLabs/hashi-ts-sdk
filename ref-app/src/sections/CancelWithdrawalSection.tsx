@@ -53,6 +53,16 @@ export function CancelWithdrawalSection({
                 <code>Requested</code> or <code>Approved</code>, after the on-chain cooldown
                 elapses. The Move side enforces all three.
             </p>
+            <p className="muted small">
+                <strong>Timing.</strong> The cooldown is counted from when you <em>requested</em>{" "}
+                the withdrawal (not from when it became <code>Approved</code>) and is a
+                governance-set value — see <code>withdrawalCancellationCooldownMs</code> in §1
+                (currently 1&nbsp;hour on devnet). Cancellation therefore only works in the window
+                between the cooldown elapsing and the committee committing the request to{" "}
+                <code>Processing</code>: try too early and you get a “cooldown has not elapsed”
+                error; once it reaches <code>Processing</code> the hBTC is burned and it can no
+                longer be cancelled.
+            </p>
 
             <label>requestId (0x-prefixed 32-byte hex):</label>
             <input
