@@ -275,6 +275,25 @@ code {
     visibility: visible;
 }
 
+/* Deposit lifecycle progress stepper (§4 status panel) */
+.dep-steps {
+    list-style: none;
+    padding: 0;
+    margin: 0.75rem 0 0;
+}
+.dep-step {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.3rem 0;
+    align-items: baseline;
+}
+.dep-step-icon {
+    flex: none;
+    width: 1.1rem;
+    text-align: center;
+    font-weight: 700;
+}
+
 /* Inline subpanel (e.g. status trackers nested in a section) */
 .subpanel {
     margin-top: 1rem;

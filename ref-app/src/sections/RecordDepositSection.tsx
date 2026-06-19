@@ -302,6 +302,23 @@ function depositBadge(status?: DepositStatus): string {
     }
 }
 
+type StepState = "done" | "active" | "pending" | "failed";
+
+function ProgressStep({ state, title, note }: { state: StepState; title: string; note?: string }) {
+    const icon = state === "done" ? "✓" : state === "failed" ? "✗" : state === "active" ? "●" : "○";
+    const iconCls =
+        state === "done" ? "ok" : state === "failed" ? "err" : state === "active" ? "" : "muted";
+    return (
+        <li className="dep-step">
+            <span className={`dep-step-icon ${iconCls}`}>{icon}</span>
+            <div>
+                <div className={state === "pending" ? "muted" : undefined}>{title}</div>
+                {note && <div className="muted small">{note}</div>}
+            </div>
+        </li>
+    );
+}
+
 function DepositStatusTracker({ digest }: { digest: string }) {
     const { data, error, isFetching, refetch } = useDepositStatus(digest);
     const [now, setNow] = useState(() => Date.now());
@@ -317,6 +334,43 @@ function DepositStatusTracker({ digest }: { digest: string }) {
     // Keep counting until the deposit reaches a terminal state. `confirmableAtMs`
     // (when present) gives a real ETA; otherwise we show elapsed wait time.
     const waiting = data == null || (data.status !== "confirmed" && data.status !== "expired");
+
+    // The deposit lifecycle as a progress stepper, derived from the on-chain
+    // status fields, so it's clear which stage is slow and why.
+    const approved = data?.approvalTimestampMs != null;
+    const confirmed = data?.status === "confirmed";
+    const expired = data?.status === "expired";
+    const confirmableAt = data?.confirmableAtMs != null ? Number(data.confirmableAtMs) : null;
+    const delayElapsed = confirmableAt != null && now >= confirmableAt;
+    const steps: { title: string; note?: string; state: StepState }[] = [
+        {
+            title: "Recorded on Sui",
+            note: "Your deposit UTXO is registered on-chain.",
+            state: "done",
+        },
+        {
+            title: "Committee approval",
+            note: expired
+                ? "Deposit expired — the funding tx didn't reach enough confirmations in time."
+                : approved || confirmed
+                  ? undefined
+                  : "Waiting for the funding tx to reach the BTC confirmation threshold (slow on signet, ~10 min/block), then a committee verification round.",
+            state: expired ? "failed" : approved || confirmed ? "done" : "active",
+        },
+        {
+            title: "Time-delay window",
+            note:
+                approved && !confirmed && !delayElapsed && confirmableAt != null
+                    ? `Security delay after approval — confirmable ${untilMs(confirmableAt, now)}.`
+                    : undefined,
+            state: confirmed || delayElapsed ? "done" : approved && !expired ? "active" : "pending",
+        },
+        {
+            title: "Confirmed — hBTC minted",
+            note: confirmed ? "Done — check your balance in §5." : undefined,
+            state: confirmed ? "done" : "pending",
+        },
+    ];
 
     return (
         <div className="subpanel">
@@ -347,6 +401,13 @@ function DepositStatusTracker({ digest }: { digest: string }) {
                 </TipButton>
             </div>
             {error && <p className="err">{describeError(error)}</p>}
+            {data && (
+                <ol className="dep-steps">
+                    {steps.map((s) => (
+                        <ProgressStep key={s.title} {...s} />
+                    ))}
+                </ol>
+            )}
             {data && (
                 <dl className="kv" style={{ marginTop: "0.75rem" }}>
                     <dt>requestId</dt>
