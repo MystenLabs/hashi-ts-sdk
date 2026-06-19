@@ -187,6 +187,12 @@ const WITHDRAWAL_LIFECYCLE: WithdrawalStatus[] = [
     "Confirmed",
 ];
 
+/** Step duration: sub-minute as one-decimal seconds ("3.5s"), longer via `elapsed`. */
+function fmtStepDuration(ms: number): string {
+    const sec = ms / 1000;
+    return sec < 60 ? `${sec.toFixed(1)}s` : elapsed(ms);
+}
+
 function WithdrawalStatusTracker({
     digest,
     onRequestId,
@@ -234,8 +240,8 @@ function WithdrawalStatusTracker({
         if (start == null) return null;
         const idx = WITHDRAWAL_LIFECYCLE.indexOf(step);
         const nextStart = enteredAt.current[WITHDRAWAL_LIFECYCLE[idx + 1]];
-        if (nextStart != null) return elapsed(nextStart - start);
-        if (step === status && step !== "Confirmed") return `${elapsed(now - start)}…`;
+        if (nextStart != null) return fmtStepDuration(nextStart - start);
+        if (step === status && step !== "Confirmed") return fmtStepDuration(now - start);
         return null;
     };
 
@@ -270,7 +276,7 @@ function WithdrawalStatusTracker({
                         <span key={step}>
                             {i > 0 && " → "}
                             {step === status ? <strong>{step}</strong> : step}
-                            {t && ` (${t})`}
+                            {t && ` [${t}]`}
                         </span>
                     );
                 })}
