@@ -64,18 +64,29 @@ export function RequestWithdrawalSection({
         enabled: !!account?.address,
         queryFn: () => hashiClient.hashi.view.balance(account!.address),
     });
+    // Withdrawal minimum from the shared ["hashi","view"] config cache (§1).
+    const { data: config } = useQuery({
+        queryKey: ["hashi", "view"],
+        queryFn: () => hashiClient.hashi.view.all(),
+    });
+    const minSats = config?.bitcoinWithdrawalMinimum;
 
-    const canAutofill = !!depositAddr && !!balance && balance.totalBalance > 0n;
+    // Default to the minimum withdrawal so a single deposit funds many round-trips
+    // (instead of draining the whole balance and forcing a fresh deposit each time).
+    const canAutofill =
+        !!depositAddr && !!balance && minSats != null && balance.totalBalance >= minSats;
     const autofill = () => {
-        if (!depositAddr || !balance) return;
+        if (!depositAddr || minSats == null) return;
         setBitcoinAddress(depositAddr);
-        setAmountSats(balance.totalBalance.toString());
+        setAmountSats(minSats.toString());
     };
-    const autofillHint = canAutofill
-        ? `Fills the destination with your own §3 deposit address (${depositAddr}) and the amount with your full §5 hBTC balance (${sats(balance.totalBalance)}) — a round-trip withdrawal back to yourself. Edit either field before submitting.`
-        : !depositAddr
-          ? "Derive your address in §3 first."
-          : "No hBTC balance to withdraw yet — complete a deposit (§4) and wait for it to confirm (§5).";
+    const autofillHint = !depositAddr
+        ? "Derive your address in §3 first."
+        : minSats == null || !balance
+          ? "Loading your balance and the withdrawal minimum…"
+          : balance.totalBalance < minSats
+            ? `Your hBTC balance (${sats(balance.totalBalance)}) is below the withdrawal minimum (${sats(minSats)}) — deposit more in §4 first.`
+            : `Fills the destination with your own §3 deposit address and the amount with the withdrawal minimum (${sats(minSats)}) — a round-trip back to yourself that spends as little as possible, so one deposit funds many withdrawals. Edit either field before submitting.`;
 
     return (
         <section className="section">
