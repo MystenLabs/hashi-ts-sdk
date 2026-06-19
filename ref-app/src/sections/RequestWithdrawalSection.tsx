@@ -216,7 +216,8 @@ function WithdrawalStatusTracker({
                 </TipButton>
             </div>
             <p className="muted small" style={{ marginTop: "0.5rem" }}>
-                Lifecycle: Requested → Approved → Processing → Signed → Confirmed
+                Lifecycle: <strong>Requested</strong> → <strong>Approved</strong> →{" "}
+                <strong>Processing</strong> → <strong>Signed</strong> → <strong>Confirmed</strong>
             </p>
             {error && <p className="err">{describeError(error)}</p>}
             {data && (
