@@ -179,6 +179,14 @@ function withdrawalBadge(status?: WithdrawalStatus | "cancelled"): string {
     }
 }
 
+const WITHDRAWAL_LIFECYCLE: WithdrawalStatus[] = [
+    "Requested",
+    "Approved",
+    "Processing",
+    "Signed",
+    "Confirmed",
+];
+
 function WithdrawalStatusTracker({
     digest,
     onRequestId,
@@ -216,8 +224,13 @@ function WithdrawalStatusTracker({
                 </TipButton>
             </div>
             <p className="muted small" style={{ marginTop: "0.5rem" }}>
-                Lifecycle: <strong>Requested</strong> → <strong>Approved</strong> →{" "}
-                <strong>Processing</strong> → <strong>Signed</strong> → <strong>Confirmed</strong>
+                Lifecycle:{" "}
+                {WITHDRAWAL_LIFECYCLE.map((step, i) => (
+                    <span key={step}>
+                        {i > 0 && " → "}
+                        {step === data?.status ? <strong>{step}</strong> : step}
+                    </span>
+                ))}
             </p>
             {error && <p className="err">{describeError(error)}</p>}
             {data && (
