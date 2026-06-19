@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useCurrentAccount, useDAppKit } from "@mysten/dapp-kit-react";
 import { bitcoinAddressToWitnessProgram } from "@mysten-incubation/hashi";
@@ -7,7 +7,7 @@ import { useHashiClient } from "../lib/hashi.ts";
 import { useWithdrawalStatus } from "../lib/poll.ts";
 import { BITCOIN_NETWORK } from "../lib/btc-type.ts";
 import { TipButton } from "../lib/TipButton.tsx";
-import { sats, describeError } from "../lib/format.ts";
+import { sats, elapsed, describeError } from "../lib/format.ts";
 
 /** Pull the digest out of the dapp-kit execution result (which carries no events). */
 function extractDigest(res: unknown): string | undefined {
@@ -196,6 +196,7 @@ function WithdrawalStatusTracker({
 }) {
     const { data, error, isFetching, refetch } = useWithdrawalStatus(digest);
     const requestId = data?.requestId;
+    const status = data?.status;
 
     // Surface the requestId (parsed server-side from WithdrawalRequestedEvent) up
     // to §8 once the status read resolves it. The dapp-kit execution result has no
@@ -203,6 +204,40 @@ function WithdrawalStatusTracker({
     useEffect(() => {
         if (requestId) onRequestId?.(requestId);
     }, [requestId, onRequestId]);
+
+    // 1s tick to keep the live "current step" timer moving.
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        const t = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(t);
+    }, []);
+
+    // The chain only exposes the request timestamp + current status, not per-step
+    // transition times. So we measure durations client-side: record when this
+    // panel first observes each step (anchoring "Requested" to the on-chain
+    // request time). Steps completed before the panel opened can't be timed.
+    const enteredAt = useRef<Partial<Record<WithdrawalStatus, number>>>({});
+    useEffect(() => {
+        if (!status || status === "cancelled") return;
+        if (enteredAt.current[status] == null) {
+            enteredAt.current[status] =
+                status === "Requested" && data?.timestampMs != null
+                    ? Number(data.timestampMs)
+                    : Date.now();
+        }
+    }, [status, data?.timestampMs]);
+
+    // Duration label for a step: the gap to the next observed step once complete,
+    // or live elapsed for the current (non-terminal) step; null if not yet timed.
+    const stepTime = (step: WithdrawalStatus): string | null => {
+        const start = enteredAt.current[step];
+        if (start == null) return null;
+        const idx = WITHDRAWAL_LIFECYCLE.indexOf(step);
+        const nextStart = enteredAt.current[WITHDRAWAL_LIFECYCLE[idx + 1]];
+        if (nextStart != null) return elapsed(nextStart - start);
+        if (step === status && step !== "Confirmed") return `${elapsed(now - start)}…`;
+        return null;
+    };
 
     return (
         <div className="subpanel">
@@ -223,14 +258,22 @@ function WithdrawalStatusTracker({
                     {isFetching ? "Refreshing…" : "Refresh"}
                 </TipButton>
             </div>
-            <p className="muted small" style={{ marginTop: "0.5rem" }}>
+            <p
+                className="muted small"
+                style={{ marginTop: "0.5rem" }}
+                title="Per-step times are measured while this panel is open (the chain exposes only the request time + current status). Steps completed before you opened it show no time."
+            >
                 Lifecycle:{" "}
-                {WITHDRAWAL_LIFECYCLE.map((step, i) => (
-                    <span key={step}>
-                        {i > 0 && " → "}
-                        {step === data?.status ? <strong>{step}</strong> : step}
-                    </span>
-                ))}
+                {WITHDRAWAL_LIFECYCLE.map((step, i) => {
+                    const t = stepTime(step);
+                    return (
+                        <span key={step}>
+                            {i > 0 && " → "}
+                            {step === status ? <strong>{step}</strong> : step}
+                            {t && ` (${t})`}
+                        </span>
+                    );
+                })}
             </p>
             {error && <p className="err">{describeError(error)}</p>}
             {data && (
