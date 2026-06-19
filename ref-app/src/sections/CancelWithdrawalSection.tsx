@@ -2,7 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useCurrentAccount, useDAppKit } from "@mysten/dapp-kit-react";
 import { useHashiClient } from "../lib/hashi.ts";
 import { TipButton } from "../lib/TipButton.tsx";
-import { describeError } from "../lib/format.ts";
+import { describeCancelWithdrawalError } from "../lib/format.ts";
 
 function extractTxBody(res: unknown): { digest?: string } {
     if (!res || typeof res !== "object") return {};
@@ -72,8 +72,8 @@ export function CancelWithdrawalSection({
             </div>
 
             {mutation.error && (
-                <p className="err mono" style={{ marginTop: "0.5rem" }}>
-                    {describeError(mutation.error)}
+                <p className="err" style={{ marginTop: "0.5rem" }}>
+                    {describeCancelWithdrawalError(mutation.error)}
                 </p>
             )}
         </section>

@@ -68,3 +68,30 @@ export function describeError(err: unknown): string {
   }
   return String(err);
 }
+
+/**
+ * Friendly text for the MoveAborts `withdraw::cancel_withdrawal` can raise.
+ *
+ * The raw error reads e.g. "MoveAbort ... cancel_withdrawal (line 365)". We
+ * match on the Sui "clever error" message when the node decodes the abort
+ * constant, and fall back to the function+line signature otherwise. Line numbers
+ * track the deployed contract (sources/btc/withdraw.move): 353
+ * (already processing), 361 (wrong sender), 365 (cooldown). Anything we don't
+ * recognize falls through to the raw message.
+ */
+export function describeCancelWithdrawalError(err: unknown): string {
+  const raw = describeError(err);
+  const lower = raw.toLowerCase();
+  const inCancel = lower.includes("cancel_withdrawal");
+
+  if (lower.includes("cooldown") || (inCancel && raw.includes("line 365"))) {
+    return "Can't cancel yet — the cancellation cooldown hasn't elapsed. Wait until withdrawalCancellationCooldownMs (shown in §1) has passed since you requested the withdrawal, then try again.";
+  }
+  if (lower.includes("original requester") || (inCancel && raw.includes("line 361"))) {
+    return "Only the wallet that created this withdrawal can cancel it — connect that account and try again.";
+  }
+  if (lower.includes("processing") || (inCancel && raw.includes("line 353"))) {
+    return "Too late to cancel — the committee has already started processing this withdrawal. Cancelling only works while it's still Requested or Approved.";
+  }
+  return raw;
+}
