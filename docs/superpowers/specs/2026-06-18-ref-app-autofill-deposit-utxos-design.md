@@ -48,6 +48,7 @@ export interface MempoolUtxo {
 export interface FundingGroup {
   txid: string; // display order
   confirmed: boolean;
+  blockTime?: number; // confirming block's UNIX time (s); undefined while unconfirmed
   utxos: { vout: number; value: number }[];
 }
 
@@ -58,8 +59,9 @@ export function mempoolBase(network: BitcoinNetwork): string | null;
 export function fetchAddressUtxos(network: BitcoinNetwork, address: string): Promise<MempoolUtxo[]>;
 
 /**
- * Group UTXOs by txid; sort confirmed-first then by descending total value.
- * Returns the chosen group plus the count of *other* groups (other funding txs).
+ * Group UTXOs by txid; pick the LATEST tx (newest first — an unconfirmed
+ * in-mempool tx outranks confirmed ones, which sort by block time; value breaks
+ * same-block ties). Returns the chosen group plus the count of *other* groups.
  */
 export function pickFundingGroup(utxos: MempoolUtxo[]): {
   group: FundingGroup | null;
@@ -86,7 +88,9 @@ export function pickFundingGroup(utxos: MempoolUtxo[]): {
   3. sets `txid = "0x" + group.txid`, replaces `rows` with one row per
      `group.utxos` (`vout`, `amountSats = value`), and fills `recipient` with the
      connected address if empty.
-- Show a result line: which tx was filled (confirmed/pending badge) and, if
+- Show a result line: which tx was filled (confirmed/pending badge), **its
+  timestamp** (`blockTime` formatted, or "just broadcast" when unconfirmed) so a
+  freshly-detected tx is distinguishable from older ones, and, if
   `otherTxCount > 0`, _"N other funding tx(s) found — submit this one, then
   re-fetch for the rest."_
 

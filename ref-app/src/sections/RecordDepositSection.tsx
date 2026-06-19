@@ -153,12 +153,15 @@ export function RecordDepositSection() {
             )}
             {autofill.data?.group && (
                 <p className="muted small" style={{ marginTop: "-0.25rem" }}>
-                    Filled from tx <code>{autofill.data.group.txid.slice(0, 12)}…</code>{" "}
+                    Filled from latest tx <code>{autofill.data.group.txid.slice(0, 12)}…</code>{" "}
                     <span
                         className={`badge ${autofill.data.group.confirmed ? "badge-ok" : "badge-pending"}`}
                     >
                         {autofill.data.group.confirmed ? "confirmed" : "pending confirmation"}
-                    </span>
+                    </span>{" "}
+                    {autofill.data.group.blockTime != null
+                        ? `· ${whenMs(autofill.data.group.blockTime * 1000)}`
+                        : "· just broadcast (not yet in a block)"}
                     {autofill.data.otherTxCount > 0 &&
                         ` — ${autofill.data.otherTxCount} other funding tx${
                             autofill.data.otherTxCount > 1 ? "s" : ""

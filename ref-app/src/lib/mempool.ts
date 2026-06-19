@@ -18,7 +18,8 @@ export interface MempoolUtxo {
     vout: number;
     /** Output value in sats. */
     value: number;
-    status: { confirmed: boolean };
+    /** `block_time` is the confirming block's UNIX time (seconds); absent while unconfirmed. */
+    status: { confirmed: boolean; block_time?: number };
 }
 
 /** UTXOs from one funding tx — the unit §4's single-`txid` form can submit at once. */
@@ -26,6 +27,8 @@ export interface FundingGroup {
     /** Funding txid in display order, no `0x` prefix. */
     txid: string;
     confirmed: boolean;
+    /** Confirming block's UNIX time (seconds); undefined while unconfirmed. */
+    blockTime?: number;
     utxos: { vout: number; value: number }[];
 }
 
@@ -73,10 +76,20 @@ function groupValue(g: FundingGroup): number {
 }
 
 /**
- * Group UTXOs by funding txid and pick one group to fill the form with —
- * confirmed txs first, then the largest by total value. All UTXOs in a group
- * share a txid and therefore the same confirmation status. `otherTxCount` is how
- * many *other* funding txs remain (the form records one tx per submit).
+ * Recency key for ordering funding txs newest-first. An unconfirmed (in-mempool)
+ * tx is the most recent thing the user could have just broadcast, so it ranks
+ * above any confirmed tx; confirmed txs then rank by their block time.
+ */
+function recency(g: FundingGroup): number {
+    return g.confirmed ? (g.blockTime ?? 0) : Number.MAX_SAFE_INTEGER;
+}
+
+/**
+ * Group UTXOs by funding txid and pick the **latest** one to fill the form with
+ * (newest first; value breaks ties within the same block). All UTXOs in a group
+ * share a txid and therefore the same confirmation status and block time.
+ * `otherTxCount` is how many *other* funding txs remain (the form records one tx
+ * per submit).
  */
 export function pickFundingGroup(utxos: MempoolUtxo[]): {
     group: FundingGroup | null;
@@ -86,14 +99,19 @@ export function pickFundingGroup(utxos: MempoolUtxo[]): {
     for (const u of utxos) {
         let g = groups.get(u.txid);
         if (!g) {
-            g = { txid: u.txid, confirmed: u.status.confirmed, utxos: [] };
+            g = {
+                txid: u.txid,
+                confirmed: u.status.confirmed,
+                blockTime: u.status.block_time,
+                utxos: [],
+            };
             groups.set(u.txid, g);
         }
         g.utxos.push({ vout: u.vout, value: u.value });
     }
     const all = [...groups.values()].sort((a, b) => {
-        if (a.confirmed !== b.confirmed) return a.confirmed ? -1 : 1;
-        return groupValue(b) - groupValue(a);
+        const byRecency = recency(b) - recency(a);
+        return byRecency !== 0 ? byRecency : groupValue(b) - groupValue(a);
     });
     return { group: all[0] ?? null, otherTxCount: Math.max(0, all.length - 1) };
 }
