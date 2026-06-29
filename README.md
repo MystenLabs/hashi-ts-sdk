@@ -46,7 +46,7 @@ const signer = Ed25519Keypair.fromSecretKey(/* … */);
 2. Send BTC to that address from any wallet.
 3. Submit the funding `txid` + `vout` to Hashi for committee confirmation.
 
-The committee watches the Bitcoin chain, confirms the funding tx after `bitcoinConfirmationThreshold` blocks, and mints `hBTC` to the `recipient` address.
+The committee watches the Bitcoin chain. Once the funding tx reaches `bitcoinConfirmationThreshold` confirmations the committee **approves** the deposit; after an additional `bitcoinDepositTimeDelayMs` safety window elapses the deposit becomes confirmable and `hBTC` is minted to the `recipient` address. `view.depositStatus(digest).confirmableAtMs` reports that earliest mint time.
 
 ```ts
 const recipient = signer.toSuiAddress();
@@ -118,6 +118,9 @@ const digest = result.Transaction?.digest;
 // One-shot status check — returns null if the digest has no Hashi event.
 const deposit = await client.hashi.view.depositStatus(digest);
 // deposit?.status: "pending" | "confirmed" | "expired" | "unknown"
+// deposit?.approvalTimestampMs — when the committee approved (null until approved)
+// deposit?.confirmableAtMs — earliest mint time = approval + bitcoinDepositTimeDelayMs
+//                            (null until approved)
 
 const withdrawal = await client.hashi.view.withdrawalStatus(digest);
 // withdrawal?.status: "Requested" | "Approved" | "Processing"
@@ -188,13 +191,13 @@ Gas estimation is best-effort — a failed simulation yields `0n` rather than th
 
 ## Reading governance state
 
-Governance parameters — the pause flag, deposit/withdrawal minimums, confirmation threshold, and cancellation cooldown — are read through `client.hashi.view`, the same namespace as the balance, status, history, and fee readers above. Prefer `view.all()` when you need 2+ values — single round-trip, internally consistent snapshot.
+Governance parameters — the pause flag, deposit/withdrawal minimums, confirmation threshold, deposit time delay, and cancellation cooldown — are read through `client.hashi.view`, the same namespace as the balance, status, history, and fee readers above. Prefer `view.all()` when you need 2+ values — single round-trip, internally consistent snapshot.
 
 ```ts
 const snap = await client.hashi.view.all();
 // { paused, bitcoinDepositMinimum, bitcoinWithdrawalMinimum,
-//   bitcoinConfirmationThreshold, withdrawalCancellationCooldownMs,
-//   worstCaseNetworkFee, ... }
+//   bitcoinConfirmationThreshold, bitcoinDepositTimeDelayMs,
+//   withdrawalCancellationCooldownMs, worstCaseNetworkFee, ... }
 ```
 
 ## Errors
