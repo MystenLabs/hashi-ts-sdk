@@ -75,6 +75,43 @@ export class HashiFetchError extends Error {
 }
 
 /**
+ * Stable discriminator for `HashiGuardianError`, so callers can `switch` on
+ * `code` rather than string-parse the message: `not-configured` (no guardian URL
+ * resolvable), `unreachable` (`fetch` threw), `http-error` (non-2xx),
+ * `malformed-response` (bad JSON or limiter field), `not-initialized` (no limiter yet).
+ */
+export type GuardianErrorCode =
+    | "not-configured"
+    | "unreachable"
+    | "http-error"
+    | "malformed-response"
+    | "not-initialized";
+
+/**
+ * Thrown by the `client.hashi.guardian.*` methods when the guardian `/info`
+ * endpoint can't be resolved, reached, parsed, or is not yet initialized.
+ * `code` is a stable discriminator for programmatic handling; `url` is the
+ * `/info` endpoint that failed (`null` for `not-configured`); `status` carries
+ * the HTTP status for `http-error`.
+ */
+export class HashiGuardianError extends Error {
+    readonly code: GuardianErrorCode;
+    readonly url: string | null;
+    readonly status?: number;
+
+    constructor(
+        details: { message: string; code: GuardianErrorCode; url?: string | null; status?: number },
+        options?: { cause?: unknown },
+    ) {
+        super(details.message, options);
+        this.name = "HashiGuardianError";
+        this.code = details.code;
+        this.url = details.url ?? null;
+        this.status = details.status;
+    }
+}
+
+/**
  * One amount that failed a client-side minimum check. `vout` is present for
  * deposit-UTXO violations (so callers can map each offender back to a Bitcoin
  * output) and absent for withdrawal violations, where there is a single

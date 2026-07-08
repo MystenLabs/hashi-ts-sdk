@@ -3,10 +3,12 @@ import { HashiClient, hashi } from "../../src/client.js";
 import {
     AmountBelowMinimumError,
     HashiConfigError,
+    HashiGuardianError,
     HashiPausedError,
     InvalidBitcoinAddressError,
     InvalidParamsError,
 } from "../../src/errors.js";
+import type { GuardianInfoProvider, RawGuardianInfo } from "../../src/types.js";
 import { Hashi } from "../../src/contracts/hashi/hashi.js";
 import { BitcoinState, BitcoinStateKey } from "../../src/contracts/hashi/bitcoin_state.js";
 import { DepositRequest } from "../../src/contracts/hashi/deposit_queue.js";
@@ -2109,6 +2111,167 @@ describe("HashiClient", () => {
                     true,
                 );
             });
+        });
+    });
+});
+
+describe("HashiClient guardian", () => {
+    const GUARDIAN_ORIGIN = "https://guardian.example";
+
+    /** Curated `/info` body matching the proxy contract (u64s as strings). */
+    const INFO_BODY = {
+        limiter: {
+            state: {
+                numTokensAvailableSats: "400000",
+                lastUpdatedAtSecs: "1720000000",
+                nextSeq: "7",
+            },
+            config: { refillRateSatsPerSec: "1000", maxBucketCapacitySats: "2000000" },
+        },
+        gitRevision: "abc123",
+        committeeEpoch: "3",
+        btcPubkey: "deadbeef",
+        signingPubKey: "feedface",
+        signedAtMs: "1720000000123",
+    };
+
+    /** The parsed limiter matching INFO_BODY, for provider-based tests. */
+    const LIMITER: NonNullable<RawGuardianInfo["limiter"]> = {
+        state: { numTokensAvailableSats: 400_000n, lastUpdatedAtSecs: 1_720_000_000n, nextSeq: 7n },
+        config: { refillRateSatsPerSec: 1_000n, maxBucketCapacitySats: 2_000_000n },
+    };
+
+    function rawInfo(limiter: RawGuardianInfo["limiter"]): RawGuardianInfo {
+        return {
+            limiter,
+            gitRevision: "abc123",
+            committeeEpoch: 3n,
+            btcPubkey: "deadbeef",
+            signingPubKey: "feedface",
+            signedAtMs: 1_720_000_000_123n,
+        };
+    }
+
+    function makeClient(opts?: { guardianUrl?: string; guardianInfoProvider?: GuardianInfoProvider }) {
+        return new SuiGrpcClient({
+            network: "devnet",
+            baseUrl: "https://fullnode.devnet.sui.io:443",
+        }).$extend(
+            hashi({
+                network: "devnet",
+                hashiObjectId: HASHI_OBJECT_ID,
+                packageId: PACKAGE_ID,
+                bitcoinNetwork: "regtest",
+                ...opts,
+            }),
+        );
+    }
+
+    function mockGuardianFetch(body: unknown, init?: { ok?: boolean; status?: number }) {
+        return vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+            ok: init?.ok ?? true,
+            status: init?.status ?? 200,
+            json: async () => body,
+        } as Response);
+    }
+
+    beforeEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("guardianInfoProvider takes precedence over guardianUrl and on-chain", async () => {
+        const provider = vi.fn(async () => rawInfo(LIMITER));
+        const fetchSpy = vi.spyOn(globalThis, "fetch");
+        const getSpy = vi.spyOn(Hashi, "get");
+        const client = makeClient({ guardianInfoProvider: provider, guardianUrl: GUARDIAN_ORIGIN });
+
+        const info = await client.hashi.guardian.info();
+
+        expect(info.limiter).toEqual(LIMITER);
+        expect(provider).toHaveBeenCalledOnce();
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(getSpy).not.toHaveBeenCalled();
+    });
+
+    it("guardianUrl takes precedence over the on-chain config", async () => {
+        const fetchSpy = mockGuardianFetch(INFO_BODY);
+        const getSpy = vi.spyOn(Hashi, "get");
+        const client = makeClient({ guardianUrl: GUARDIAN_ORIGIN });
+
+        const info = await client.hashi.guardian.info();
+
+        expect(fetchSpy).toHaveBeenCalledWith(`${GUARDIAN_ORIGIN}/info`, {
+            headers: { Accept: "application/json" },
+        });
+        expect(getSpy).not.toHaveBeenCalled();
+        expect(info.limiter?.state.numTokensAvailableSats).toBe(400_000n);
+    });
+
+    it("resolves the guardian URL from the on-chain guardian_url config", async () => {
+        mockHashiWithConfig([
+            ...WELL_FORMED_CONFIG,
+            { key: "guardian_url", value: { $kind: "String", String: GUARDIAN_ORIGIN } },
+        ]);
+        const fetchSpy = mockGuardianFetch(INFO_BODY);
+        const client = makeClient();
+
+        await client.hashi.guardian.info();
+
+        expect(Hashi.get).toHaveBeenCalledOnce();
+        expect(fetchSpy).toHaveBeenCalledWith(`${GUARDIAN_ORIGIN}/info`, {
+            headers: { Accept: "application/json" },
+        });
+    });
+
+    it("throws not-configured when no guardian URL can be resolved", async () => {
+        mockHashiWithConfig(WELL_FORMED_CONFIG); // no guardian_url entry
+        const client = makeClient();
+
+        const err = await client.hashi.guardian.info().catch((e) => e);
+        expect(err).toBeInstanceOf(HashiGuardianError);
+        expect(err.code).toBe("not-configured");
+    });
+
+    it("info() returns limiter: null but limiterStatus()/canWithdraw() throw not-initialized", async () => {
+        const client = makeClient({ guardianInfoProvider: async () => rawInfo(null) });
+
+        expect((await client.hashi.guardian.info()).limiter).toBeNull();
+
+        const statusErr = await client.hashi.guardian.limiterStatus().catch((e) => e);
+        expect(statusErr).toBeInstanceOf(HashiGuardianError);
+        expect(statusErr.code).toBe("not-initialized");
+
+        const withdrawErr = await client.hashi.guardian.canWithdraw(1n).catch((e) => e);
+        expect(withdrawErr).toBeInstanceOf(HashiGuardianError);
+        expect(withdrawErr.code).toBe("not-initialized");
+    });
+
+    it("limiterStatus() projects capacity, fill %, and the refill-to-full ETA", async () => {
+        // 100s after lastUpdatedAt: 400_000 + 100*1_000 = 500_000 of 2_000_000 (25%).
+        vi.spyOn(Date, "now").mockReturnValue(1_720_000_100_000);
+        const client = makeClient({ guardianInfoProvider: async () => rawInfo(LIMITER) });
+
+        const status = await client.hashi.guardian.limiterStatus();
+
+        expect(status.availableNowSats).toBe(500_000n);
+        expect(status.bucketFillPercent).toBe(25);
+        // Deficit 1_500_000 / 1_000 sat/s = 1_500s until full.
+        expect(status.fullAtSecs).toBe(1_720_001_600n);
+    });
+
+    it("canWithdraw() reports allowed and the estimated wait", async () => {
+        vi.spyOn(Date, "now").mockReturnValue(1_720_000_100_000); // available = 500_000
+        const client = makeClient({ guardianInfoProvider: async () => rawInfo(LIMITER) });
+
+        expect(await client.hashi.guardian.canWithdraw(500_000n)).toEqual({
+            allowed: true,
+            availableNowSats: 500_000n,
+            estimatedWaitSecs: 0n,
+        });
+        expect(await client.hashi.guardian.canWithdraw(700_000n)).toEqual({
+            allowed: false,
+            availableNowSats: 500_000n,
+            estimatedWaitSecs: 200n, // deficit 200_000 / 1_000 sat/s
         });
     });
 });

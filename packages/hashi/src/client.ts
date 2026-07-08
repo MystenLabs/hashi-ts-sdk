@@ -30,6 +30,7 @@ import {
     AmountBelowMinimumError,
     HashiConfigError,
     HashiFetchError,
+    HashiGuardianError,
     HashiPausedError,
     InvalidParamsError,
 } from "./errors.js";
@@ -42,8 +43,13 @@ import type {
     DepositParams,
     DepositStatus,
     GovernanceConfig,
+    GuardianInfoProvider,
+    GuardianLimiterRaw,
+    GuardianLimiterSnapshot,
+    GuardianWithdrawCheck,
     HashiClientOptions,
     HbtcBalance,
+    RawGuardianInfo,
     SuiNetwork,
     TransactionHistoryItem,
     UtxoId,
@@ -61,6 +67,7 @@ import {
     lookupAllVouts,
     getTxConfirmations,
 } from "./btc-rpc.js";
+import { projectCapacity, estimateWaitSecs, fetchGuardianInfo } from "./guardian.js";
 import { assertHex32, configBytes, entry, reverseTxidBytes, type ConfigEntry } from "./util.js";
 
 /** ObjectBag dynamic field name type (Wrapper<address> for dynamic_object_field lookups). */
@@ -145,6 +152,10 @@ export class HashiClient {
     #bitcoinNetwork: BitcoinNetwork;
     #btcRpcUrl: string | undefined;
     #graphqlUrl: string;
+    #guardianUrl: string | undefined;
+    #guardianInfoProvider: GuardianInfoProvider | undefined;
+    // undefined = not yet resolved from chain; null = resolved-but-absent; string = resolved.
+    #resolvedGuardianUrl: string | null | undefined;
 
     constructor({
         client,
@@ -154,6 +165,8 @@ export class HashiClient {
         bitcoinNetwork,
         btcRpcUrl,
         graphqlUrl,
+        guardianUrl,
+        guardianInfoProvider,
     }: {
         client: ClientWithCoreApi;
         network: SuiNetwork;
@@ -162,6 +175,8 @@ export class HashiClient {
         bitcoinNetwork?: BitcoinNetwork;
         btcRpcUrl?: string;
         graphqlUrl?: string;
+        guardianUrl?: string;
+        guardianInfoProvider?: GuardianInfoProvider;
     }) {
         const config = NETWORK_CONFIG[network];
         const resolvedObjectId = hashiObjectId ?? config?.hashiObjectId;
@@ -177,6 +192,8 @@ export class HashiClient {
         this.#bitcoinNetwork = bitcoinNetwork ?? config?.bitcoinNetwork ?? "testnet";
         this.#btcRpcUrl = btcRpcUrl;
         this.#graphqlUrl = graphqlUrl ?? defaultGraphqlUrl(network);
+        this.#guardianUrl = guardianUrl;
+        this.#guardianInfoProvider = guardianInfoProvider;
     }
 
     /**
@@ -1211,6 +1228,106 @@ export class HashiClient {
                     "Pass it in HashiClientOptions.",
             );
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Guardian rate limiter (optional — requires guardianUrl,
+    // guardianInfoProvider, or an on-chain `guardian_url` config value)
+    // ------------------------------------------------------------------
+
+    guardian = {
+        /**
+         * Fetch the guardian's curated `/info` (identity + limiter). `limiter`
+         * is `null` when the guardian is not yet provisioned/activated; this
+         * method never throws for that state, so it can detect an uninitialized
+         * guardian without a try/catch.
+         */
+        info: async (): Promise<RawGuardianInfo> => {
+            const provider = await this.#resolveGuardianProvider();
+            return provider();
+        },
+
+        /**
+         * Fetch the limiter and compute derived fields: capacity projected to
+         * now, bucket fill percentage, and the refill-to-full ETA. Throws
+         * `HashiGuardianError` (`code: "not-initialized"`) if the guardian has
+         * no limiter yet.
+         */
+        limiterStatus: async (): Promise<GuardianLimiterSnapshot> => {
+            const { state, config } = this.#requireLimiter(await this.guardian.info());
+            const nowSecs = BigInt(Math.floor(Date.now() / 1000));
+            const availableNowSats = projectCapacity(config, state, nowSecs);
+            const max = config.maxBucketCapacitySats;
+            const bucketFillPercent = max > 0n ? (Number(availableNowSats) / Number(max)) * 100 : 0;
+            let fullAtSecs: bigint | null = null;
+            if (availableNowSats < max && config.refillRateSatsPerSec > 0n) {
+                const deficit = max - availableNowSats;
+                const secsToFull =
+                    (deficit + config.refillRateSatsPerSec - 1n) / config.refillRateSatsPerSec;
+                fullAtSecs = nowSecs + secsToFull;
+            }
+            return { state, config, availableNowSats, bucketFillPercent, fullAtSecs };
+        },
+
+        /**
+         * Check whether the guardian can sign a withdrawal of `amountSats` right
+         * now, with an estimated wait if not. Throws `HashiGuardianError`
+         * (`code: "not-initialized"`) if the guardian has no limiter yet.
+         */
+        canWithdraw: async (amountSats: bigint): Promise<GuardianWithdrawCheck> => {
+            const { state, config } = this.#requireLimiter(await this.guardian.info());
+            const nowSecs = BigInt(Math.floor(Date.now() / 1000));
+            const availableNowSats = projectCapacity(config, state, nowSecs);
+            const estimatedWaitSecs = estimateWaitSecs(config, state, amountSats, nowSecs);
+            return { allowed: availableNowSats >= amountSats, availableNowSats, estimatedWaitSecs };
+        },
+    };
+
+    #requireLimiter(info: RawGuardianInfo): GuardianLimiterRaw {
+        if (info.limiter === null) {
+            throw new HashiGuardianError({
+                message: "Guardian rate limiter is not initialized (limiter is null).",
+                code: "not-initialized",
+            });
+        }
+        return info.limiter;
+    }
+
+    async #resolveGuardianProvider(): Promise<GuardianInfoProvider> {
+        if (this.#guardianInfoProvider) return this.#guardianInfoProvider;
+        let url = this.#guardianUrl;
+        if (!url) {
+            if (this.#resolvedGuardianUrl === undefined) {
+                let onChain: string | null;
+                try {
+                    onChain = (await this.view.all()).guardianUrl;
+                } catch (cause) {
+                    // Do NOT cache: a transient chain-read failure must not
+                    // permanently disable guardian resolution for this client.
+                    throw new HashiGuardianError(
+                        {
+                            message:
+                                "Could not read the on-chain guardian_url config. Pass " +
+                                "`guardianUrl` or `guardianInfoProvider` to bypass the on-chain read.",
+                            code: "not-configured",
+                        },
+                        { cause },
+                    );
+                }
+                this.#resolvedGuardianUrl = onChain; // cache success (a URL or a genuine null)
+            }
+            url = this.#resolvedGuardianUrl ?? undefined;
+        }
+        if (!url) {
+            throw new HashiGuardianError({
+                message:
+                    "Guardian URL is not configured. Pass `guardianUrl` or `guardianInfoProvider` " +
+                    "to hashi({...}), or set `guardian_url` in the on-chain config.",
+                code: "not-configured",
+            });
+        }
+        const origin = url;
+        return () => fetchGuardianInfo(origin);
     }
 
     async #estimateGas(tx: Transaction): Promise<bigint> {
