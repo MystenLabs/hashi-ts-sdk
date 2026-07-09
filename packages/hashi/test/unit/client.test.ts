@@ -2232,6 +2232,38 @@ describe("HashiClient guardian", () => {
         expect(err.code).toBe("not-configured");
     });
 
+    it("re-reads on-chain while guardian_url is absent, then caches it once launch publishes it", async () => {
+        // hashi#772 defers `guardian_url` to launch (`finish_publish`), so a client
+        // created pre-launch must keep re-reading the chain — never cache the
+        // absence and fail forever once the URL appears.
+        const client = makeClient();
+
+        // Pre-launch: absent guardian_url → not-configured, re-read (not cached) each call.
+        mockHashiWithConfig(WELL_FORMED_CONFIG);
+        expect((await client.hashi.guardian.info().catch((e) => e)).code).toBe("not-configured");
+        mockHashiWithConfig(WELL_FORMED_CONFIG);
+        expect((await client.hashi.guardian.info().catch((e) => e)).code).toBe("not-configured");
+        expect(Hashi.get).toHaveBeenCalledTimes(2); // re-read each time, never cached a null
+
+        // Launch publishes guardian_url → the same client resolves and succeeds.
+        mockHashiWithConfig([
+            ...WELL_FORMED_CONFIG,
+            { key: "guardian_url", value: { $kind: "String", String: GUARDIAN_ORIGIN } },
+        ]);
+        const fetchSpy = mockGuardianFetch(INFO_BODY);
+        const info = await client.hashi.guardian.info();
+        expect(info.limiter?.state.numTokensAvailableSats).toBe(400_000n);
+        expect(fetchSpy).toHaveBeenCalledWith(`${GUARDIAN_ORIGIN}/info`, {
+            headers: { Accept: "application/json" },
+        });
+        expect(Hashi.get).toHaveBeenCalledTimes(3); // one more read to pick up the URL
+
+        // Now cached: a later call skips the chain read and hits the guardian directly.
+        mockGuardianFetch(INFO_BODY);
+        await client.hashi.guardian.info();
+        expect(Hashi.get).toHaveBeenCalledTimes(3); // unchanged — URL cached after launch
+    });
+
     it("info() returns limiter: null but limiterStatus()/canWithdraw() throw not-initialized", async () => {
         const client = makeClient({ guardianInfoProvider: async () => rawInfo(null) });
 

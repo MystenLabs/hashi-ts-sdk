@@ -154,8 +154,10 @@ export class HashiClient {
     #graphqlUrl: string;
     #guardianUrl: string | undefined;
     #guardianInfoProvider: GuardianInfoProvider | undefined;
-    // undefined = not yet resolved from chain; null = resolved-but-absent; string = resolved.
-    #resolvedGuardianUrl: string | null | undefined;
+    // A URL resolved from the on-chain `guardian_url`, cached once found. Stays
+    // `undefined` while `guardian_url` is still absent (pre-launch), so we keep
+    // re-reading the chain until launch (`finish_publish`) publishes it.
+    #resolvedGuardianUrl: string | undefined;
 
     constructor({
         client,
@@ -1295,29 +1297,7 @@ export class HashiClient {
 
     async #resolveGuardianProvider(): Promise<GuardianInfoProvider> {
         if (this.#guardianInfoProvider) return this.#guardianInfoProvider;
-        let url = this.#guardianUrl;
-        if (!url) {
-            if (this.#resolvedGuardianUrl === undefined) {
-                let onChain: string | null;
-                try {
-                    onChain = (await this.view.all()).guardianUrl;
-                } catch (cause) {
-                    // Do NOT cache: a transient chain-read failure must not
-                    // permanently disable guardian resolution for this client.
-                    throw new HashiGuardianError(
-                        {
-                            message:
-                                "Could not read the on-chain guardian_url config. Pass " +
-                                "`guardianUrl` or `guardianInfoProvider` to bypass the on-chain read.",
-                            code: "not-configured",
-                        },
-                        { cause },
-                    );
-                }
-                this.#resolvedGuardianUrl = onChain; // cache success (a URL or a genuine null)
-            }
-            url = this.#resolvedGuardianUrl ?? undefined;
-        }
+        const url = this.#guardianUrl || (await this.#resolveOnChainGuardianUrl());
         if (!url) {
             throw new HashiGuardianError({
                 message:
@@ -1326,8 +1306,36 @@ export class HashiClient {
                 code: "not-configured",
             });
         }
-        const origin = url;
-        return () => fetchGuardianInfo(origin);
+        return () => fetchGuardianInfo(url);
+    }
+
+    /**
+     * Resolve the guardian origin from the on-chain `guardian_url`, caching only
+     * a found URL. `guardian_url` is absent until launch (`finish_publish`
+     * publishes it), so a missing value is left uncached and each call re-reads
+     * the chain — a client created before launch starts working once the URL is
+     * published, rather than caching the absence forever (mirrors the node's
+     * lazy `guardian_client()` resolution). Returns `undefined` while unresolved.
+     */
+    async #resolveOnChainGuardianUrl(): Promise<string | undefined> {
+        if (this.#resolvedGuardianUrl) return this.#resolvedGuardianUrl;
+        let onChain: string | null;
+        try {
+            onChain = (await this.view.all()).guardianUrl;
+        } catch (cause) {
+            // A transient chain-read failure must not permanently disable
+            // guardian resolution for this client; surface it, cache nothing.
+            throw new HashiGuardianError(
+                {
+                    message:
+                        "Could not read the on-chain guardian_url config. Pass " +
+                        "`guardianUrl` or `guardianInfoProvider` to bypass the on-chain read.",
+                    code: "not-configured",
+                },
+                { cause },
+            );
+        }
+        return (this.#resolvedGuardianUrl = onChain || undefined);
     }
 
     async #estimateGas(tx: Transaction): Promise<bigint> {

@@ -270,7 +270,7 @@ const check = await client.hashi.guardian.canWithdraw(50_000n);
 // { allowed, availableNowSats, estimatedWaitSecs }
 ```
 
-`guardianUrl` overrides the on-chain `guardian_url`; a `guardianInfoProvider` overrides both (useful for caching or a custom transport). `limiterStatus()` and `canWithdraw()` throw `HashiGuardianError` (`code: "not-initialized"`) before the guardian is provisioned — use `guardian.info()`, whose `limiter` is `null`, to detect that state without a try/catch.
+`guardianUrl` overrides the on-chain `guardian_url`; a `guardianInfoProvider` overrides both (useful for caching or a custom transport). The on-chain `guardian_url` is only published at launch, so a client constructed beforehand re-reads the chain on each call until it resolves — throwing `HashiGuardianError` (`code: "not-configured"`) meanwhile — then caches the URL once found. `limiterStatus()` and `canWithdraw()` throw `HashiGuardianError` (`code: "not-initialized"`) before the guardian is provisioned — use `guardian.info()`, whose `limiter` is `null`, to detect that state without a try/catch.
 
 ## Bitcoin address derivation
 
