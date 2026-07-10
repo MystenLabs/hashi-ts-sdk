@@ -855,7 +855,7 @@ export class HashiClient {
         /**
          * Get the status and details of a deposit by its Sui transaction digest.
          *
-         * Fetches the `DepositRequested` from the transaction, extracts the
+         * Fetches the `DepositRequested` event from the transaction, extracts the
          * request ID, then probes on-chain state to determine whether the deposit
          * is pending (still in `requests` ObjectBag), confirmed (object exists
          * but not in requests), or expired (object destroyed).
@@ -943,7 +943,7 @@ export class HashiClient {
         /**
          * Get the status and details of a withdrawal by its Sui transaction digest.
          *
-         * Fetches the `WithdrawalRequested` from the transaction, extracts the
+         * Fetches the `WithdrawalRequested` event from the transaction, extracts the
          * request ID, then reads the `WithdrawalRequest` object to determine the
          * current lifecycle state. If a `WithdrawalTransaction` is linked, its
          * Bitcoin txid is populated.
@@ -1086,7 +1086,7 @@ export class HashiClient {
          * Fetch the unified transaction history (deposits + withdrawals) for
          * a Sui address. Confirmed requests come from the on-chain
          * `user_requests` index; in-flight deposits are discovered via
-         * GraphQL `DepositRequested` queries (indexed by sender).
+         * GraphQL `DepositRequested` event queries (indexed by sender).
          */
         transactionHistory: async (suiAddress: string): Promise<TransactionHistoryItem[]> => {
             const [btcState, timeDelayMs] = await Promise.all([
