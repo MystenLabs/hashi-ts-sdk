@@ -1,10 +1,21 @@
 /**************************************************************
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
+
+/**
+ * BLS signing committees and certificate verification. A `Committee` pins an
+ * epoch's members (validator addresses, BLS public keys, encryption keys, voting
+ * weights) together with the MPC parameters snapshotted at reconfig time.
+ * `verify_certificate` checks an aggregate BLS12-381 min-pk signature against a
+ * signers bitmap, enforces the stake threshold, and wraps the payload in a
+ * `CertifiedMessage` as proof of committee approval.
+ */
+
 import { MoveStruct, normalizeMoveArguments, type RawTransactionArgument } from "../utils/index.js";
 import { bcs, type BcsType } from "@mysten/sui/bcs";
 import { type Transaction } from "@mysten/sui/transactions";
 import * as group_ops from "./deps/sui/group_ops.js";
+import * as config from "./config.js";
 const $moduleName = "@local-pkg/hashi::committee";
 export const CommitteeMember = new MoveStruct({
     name: `${$moduleName}::CommitteeMember`,
@@ -24,12 +35,12 @@ export const Committee = new MoveStruct({
         members: bcs.vector(CommitteeMember),
         /** Total voting weight of the committee. */
         total_weight: bcs.u64(),
-        /** MPC threshold in basis points */
-        mpc_threshold_in_basis_points: bcs.u64(),
-        /** Allowed delta for weight reduction */
-        mpc_weight_reduction_allowed_delta: bcs.u64(),
-        /** MPC max faulty parties in basis points */
-        mpc_max_faulty_in_basis_points: bcs.u64(),
+        /**
+         * The config pinned for this epoch (the MPC parameters: threshold,
+         * weight-reduction delta, max-faulty bound, nonce-generation protocol),
+         * snapshotted from the governed config at reconfig time.
+         */
+        config: config.Config,
     },
 });
 export const CommitteeSignature = new MoveStruct({

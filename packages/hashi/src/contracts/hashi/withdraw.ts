@@ -2,7 +2,15 @@
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
 
-/** Module: withdraw */
+/**
+ * User-facing Bitcoin withdrawal flow. A user escrows hBTC against a target
+ * Bitcoin address; the committee approves the request, batches one or more
+ * requests into a withdrawal transaction (burning the hBTC and locking the input
+ * UTXOs), accumulates per-input MPC signatures incrementally, finalizes with the
+ * one-shot guardian signatures, and confirms once the transaction lands on
+ * Bitcoin. A not-yet-committed request can be cancelled by its requester after a
+ * cooldown, refunding the hBTC.
+ */
 
 import { MoveStruct, normalizeMoveArguments, type RawTransactionArgument } from "../utils/index.js";
 import { bcs } from "@mysten/sui/bcs";
@@ -34,51 +42,20 @@ export const WithdrawalSignedMessage = new MoveStruct({
         guardian_signatures: bcs.vector(bcs.vector(bcs.u8())),
     },
 });
+export const MpcInputSignaturesMessage = new MoveStruct({
+    name: `${$moduleName}::MpcInputSignaturesMessage`,
+    fields: {
+        withdrawal_id: bcs.Address,
+        indices: bcs.vector(bcs.u64()),
+        signatures: bcs.vector(bcs.vector(bcs.u8())),
+    },
+});
 export const WithdrawalConfirmationMessage = new MoveStruct({
     name: `${$moduleName}::WithdrawalConfirmationMessage`,
     fields: {
         withdrawal_id: bcs.Address,
     },
 });
-export interface RequestWithdrawalArguments {
-    hashi: RawTransactionArgument<string>;
-    btc: RawTransactionArgument<string>;
-    bitcoinAddress: RawTransactionArgument<number[]>;
-}
-export interface RequestWithdrawalOptions {
-    package?: string;
-    arguments:
-        | RequestWithdrawalArguments
-        | [
-              hashi: RawTransactionArgument<string>,
-              btc: RawTransactionArgument<string>,
-              bitcoinAddress: RawTransactionArgument<number[]>,
-          ];
-}
-/**
- * Request a withdrawal of BTC from the bridge.
- *
- * The full BTC amount is stored in the withdrawal request. The miner fee is
- * deducted later at commitment time.
- *
- * The user must provide at least `bitcoin_withdrawal_minimum()` sats, which
- * guarantees the amount covers worst-case miner fees plus dust.
- */
-export function requestWithdrawal(options: RequestWithdrawalOptions) {
-    const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, "0x2::clock::Clock", null, "vector<u8>"] satisfies (
-        | string
-        | null
-    )[];
-    const parameterNames = ["hashi", "btc", "bitcoinAddress"];
-    return (tx: Transaction) =>
-        tx.moveCall({
-            package: packageAddress,
-            module: "withdraw",
-            function: "request_withdrawal",
-            arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-        });
-}
 export interface ApproveRequestArguments {
     hashi: RawTransactionArgument<string>;
     requestId: RawTransactionArgument<string>;
@@ -96,7 +73,7 @@ export interface ApproveRequestOptions {
 }
 export function approveRequest(options: ApproveRequestOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, "address", null] satisfies (string | null)[];
+    const argumentsTypes = [null, "address", null, "0x2::clock::Clock"] satisfies (string | null)[];
     const parameterNames = ["hashi", "requestId", "cert"];
     return (tx: Transaction) =>
         tx.moveCall({
@@ -148,72 +125,88 @@ export function commitWithdrawalTx(options: CommitWithdrawalTxOptions) {
             arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         });
 }
-export interface AllocatePresigsForWithdrawalTxnArguments {
+export interface CommitInputSignaturesArguments {
     hashi: RawTransactionArgument<string>;
     withdrawalId: RawTransactionArgument<string>;
+    indices: RawTransactionArgument<number | bigint[]>;
+    signatures: RawTransactionArgument<number[][]>;
+    cert: RawTransactionArgument<string>;
 }
-export interface AllocatePresigsForWithdrawalTxnOptions {
+export interface CommitInputSignaturesOptions {
     package?: string;
     arguments:
-        | AllocatePresigsForWithdrawalTxnArguments
-        | [hashi: RawTransactionArgument<string>, withdrawalId: RawTransactionArgument<string>];
+        | CommitInputSignaturesArguments
+        | [
+              hashi: RawTransactionArgument<string>,
+              withdrawalId: RawTransactionArgument<string>,
+              indices: RawTransactionArgument<number | bigint[]>,
+              signatures: RawTransactionArgument<number[][]>,
+              cert: RawTransactionArgument<string>,
+          ];
 }
-export function allocatePresigsForWithdrawalTxn(options: AllocatePresigsForWithdrawalTxnOptions) {
+/**
+ * Record a chunk of completed per-input MPC signatures into the withdrawal's
+ * signing batch (out-of-order, first-writer-wins). Cert-gated over exactly the
+ * `(withdrawal_id, indices, signatures)` written, by the current committee.
+ * Repeated across checkpoints/leaders until every input is signed; the leader may
+ * bundle a final chunk + `finalize_withdrawal` in one PTB for small txns.
+ */
+export function commitInputSignatures(options: CommitInputSignaturesOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, "address"] satisfies (string | null)[];
-    const parameterNames = ["hashi", "withdrawalId"];
+    const argumentsTypes = [null, "address", "vector<u64>", "vector<vector<u8>>", null] satisfies (
+        | string
+        | null
+    )[];
+    const parameterNames = ["hashi", "withdrawalId", "indices", "signatures", "cert"];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,
             module: "withdraw",
-            function: "allocate_presigs_for_withdrawal_txn",
+            function: "commit_input_signatures",
             arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         });
 }
-export interface SignWithdrawalArguments {
+export interface FinalizeWithdrawalArguments {
     hashi: RawTransactionArgument<string>;
     withdrawalId: RawTransactionArgument<string>;
     requestIds: RawTransactionArgument<string[]>;
-    signatures: RawTransactionArgument<number[][]>;
     guardianSignatures: RawTransactionArgument<number[][]>;
     cert: RawTransactionArgument<string>;
 }
-export interface SignWithdrawalOptions {
+export interface FinalizeWithdrawalOptions {
     package?: string;
     arguments:
-        | SignWithdrawalArguments
+        | FinalizeWithdrawalArguments
         | [
               hashi: RawTransactionArgument<string>,
               withdrawalId: RawTransactionArgument<string>,
               requestIds: RawTransactionArgument<string[]>,
-              signatures: RawTransactionArgument<number[][]>,
               guardianSignatures: RawTransactionArgument<number[][]>,
               cert: RawTransactionArgument<string>,
           ];
 }
-export function signWithdrawal(options: SignWithdrawalOptions) {
+/**
+ * Finalize a withdrawal once all MPC signatures are in: attach the one-shot
+ * guardian signatures and flip the broadcast gate. The cert binds the full MPC
+ * signature set (read from the batch) together with the guardian signatures, so a
+ * malicious leader cannot pair valid MPC sigs with garbage guardian sigs.
+ */
+export function finalizeWithdrawal(options: FinalizeWithdrawalOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
     const argumentsTypes = [
         null,
         "address",
         "vector<address>",
         "vector<vector<u8>>",
-        "vector<vector<u8>>",
         null,
+        "0x2::clock::Clock",
     ] satisfies (string | null)[];
-    const parameterNames = [
-        "hashi",
-        "withdrawalId",
-        "requestIds",
-        "signatures",
-        "guardianSignatures",
-        "cert",
-    ];
+    const parameterNames = ["hashi", "withdrawalId", "requestIds", "guardianSignatures", "cert"];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,
             module: "withdraw",
-            function: "sign_withdrawal",
+            function: "finalize_withdrawal",
             arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         });
 }
@@ -234,13 +227,46 @@ export interface ConfirmWithdrawalOptions {
 }
 export function confirmWithdrawal(options: ConfirmWithdrawalOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, "address", null] satisfies (string | null)[];
+    const argumentsTypes = [null, "address", null, "0x2::clock::Clock"] satisfies (string | null)[];
     const parameterNames = ["hashi", "withdrawalId", "cert"];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,
             module: "withdraw",
             function: "confirm_withdrawal",
+            arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        });
+}
+export interface ReallocatePresigsArguments {
+    hashi: RawTransactionArgument<string>;
+    withdrawalId: RawTransactionArgument<string>;
+}
+export interface ReallocatePresigsOptions {
+    package?: string;
+    arguments:
+        | ReallocatePresigsArguments
+        | [hashi: RawTransactionArgument<string>, withdrawalId: RawTransactionArgument<string>];
+}
+/**
+ * Reassign fresh presignatures to the still-unsigned inputs of a withdrawal whose
+ * signing batch is from a previous epoch. Only the pending tail is re-presigned;
+ * already-collected signatures are final and epoch-independent.
+ *
+ * Gated like commit/finalize (version-enabled, unpaused, not-reconfiguring): an
+ * in-progress reconfiguration settles first, then this runs afterward to recover
+ * the now-stale batch. Carries no committee cert: it authorizes no signatures,
+ * only re-points pending presig indices, bounded to once-per-withdrawal-per-epoch
+ * by the `mpc_signing` stale-epoch guard.
+ */
+export function reallocatePresigs(options: ReallocatePresigsOptions) {
+    const packageAddress = options.package ?? "@local-pkg/hashi";
+    const argumentsTypes = [null, "address"] satisfies (string | null)[];
+    const parameterNames = ["hashi", "withdrawalId"];
+    return (tx: Transaction) =>
+        tx.moveCall({
+            package: packageAddress,
+            module: "withdraw",
+            function: "reallocate_presigs",
             arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         });
 }
@@ -259,6 +285,9 @@ export interface CleanupSpentUtxosOptions {
  * `utxo_records` to `spent_utxos`, reading the spent epoch from the record's
  * `spent_epoch` field (set by `mark_spent` during `confirm_withdrawal`). Callers
  * pass the individual UTXO IDs to clean up.
+ *
+ * Garbage collection: deliberately NOT gated on pause/reconfig — it moves no funds
+ * and must stay callable during an emergency pause.
  */
 export function cleanupSpentUtxos(options: CleanupSpentUtxosOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
@@ -269,6 +298,45 @@ export function cleanupSpentUtxos(options: CleanupSpentUtxosOptions) {
             package: packageAddress,
             module: "withdraw",
             function: "cleanup_spent_utxos",
+            arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        });
+}
+export interface RequestWithdrawalArguments {
+    hashi: RawTransactionArgument<string>;
+    btc: RawTransactionArgument<string>;
+    bitcoinAddress: RawTransactionArgument<number[]>;
+}
+export interface RequestWithdrawalOptions {
+    package?: string;
+    arguments:
+        | RequestWithdrawalArguments
+        | [
+              hashi: RawTransactionArgument<string>,
+              btc: RawTransactionArgument<string>,
+              bitcoinAddress: RawTransactionArgument<number[]>,
+          ];
+}
+/**
+ * Request a withdrawal of BTC from the bridge.
+ *
+ * The full BTC amount is stored in the withdrawal request. The miner fee is
+ * deducted later at commitment time.
+ *
+ * The user must provide at least `bitcoin_withdrawal_minimum()` sats, which
+ * guarantees the amount covers worst-case miner fees plus dust.
+ */
+export function requestWithdrawal(options: RequestWithdrawalOptions) {
+    const packageAddress = options.package ?? "@local-pkg/hashi";
+    const argumentsTypes = [null, "0x2::clock::Clock", null, "vector<u8>"] satisfies (
+        | string
+        | null
+    )[];
+    const parameterNames = ["hashi", "btc", "bitcoinAddress"];
+    return (tx: Transaction) =>
+        tx.moveCall({
+            package: packageAddress,
+            module: "withdraw",
+            function: "request_withdrawal",
             arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         });
 }

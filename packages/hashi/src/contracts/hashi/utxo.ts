@@ -1,6 +1,15 @@
 /**************************************************************
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
+
+/**
+ * Bitcoin UTXO value types shared by the deposit and withdrawal flows. A `UtxoId`
+ * identifies an outpoint (txid:vout) and a `Utxo` pairs it with its satoshi amount
+ * and an optional derivation path (the Sui address a deposit mints to). The
+ * constructors are `public` so PTBs can assemble UTXOs when calling into the
+ * bridge; everything else is package-only.
+ */
+
 import { MoveStruct, normalizeMoveArguments, type RawTransactionArgument } from "../utils/index.js";
 import { bcs } from "@mysten/sui/bcs";
 import { type Transaction } from "@mysten/sui/transactions";
@@ -69,63 +78,6 @@ export function utxo(options: UtxoOptions) {
             package: packageAddress,
             module: "utxo",
             function: "utxo",
-            arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-        });
-}
-export interface IdArguments {
-    self: RawTransactionArgument<string>;
-}
-export interface IdOptions {
-    package?: string;
-    arguments: IdArguments | [self: RawTransactionArgument<string>];
-}
-export function id(options: IdOptions) {
-    const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null] satisfies (string | null)[];
-    const parameterNames = ["self"];
-    return (tx: Transaction) =>
-        tx.moveCall({
-            package: packageAddress,
-            module: "utxo",
-            function: "id",
-            arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-        });
-}
-export interface AmountArguments {
-    self: RawTransactionArgument<string>;
-}
-export interface AmountOptions {
-    package?: string;
-    arguments: AmountArguments | [self: RawTransactionArgument<string>];
-}
-export function amount(options: AmountOptions) {
-    const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null] satisfies (string | null)[];
-    const parameterNames = ["self"];
-    return (tx: Transaction) =>
-        tx.moveCall({
-            package: packageAddress,
-            module: "utxo",
-            function: "amount",
-            arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-        });
-}
-export interface DerivationPathArguments {
-    self: RawTransactionArgument<string>;
-}
-export interface DerivationPathOptions {
-    package?: string;
-    arguments: DerivationPathArguments | [self: RawTransactionArgument<string>];
-}
-export function derivationPath(options: DerivationPathOptions) {
-    const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null] satisfies (string | null)[];
-    const parameterNames = ["self"];
-    return (tx: Transaction) =>
-        tx.moveCall({
-            package: packageAddress,
-            module: "utxo",
-            function: "derivation_path",
             arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         });
 }

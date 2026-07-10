@@ -1,6 +1,15 @@
 /**************************************************************
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
+
+/**
+ * Per-chain Bitcoin state, attached to the `Hashi` shared object as a dynamic
+ * field keyed by `BitcoinStateKey`. Bundles the deposit queue, withdrawal queue,
+ * and UTXO pool behind package-only accessors, and maintains a per-user index of
+ * request IDs so clients can discover all deposits and withdrawals belonging to an
+ * address.
+ */
+
 import { MoveStruct } from "../utils/index.js";
 import { bcs } from "@mysten/sui/bcs";
 import * as deposit_queue from "./deposit_queue.js";
@@ -17,6 +26,11 @@ export const BitcoinStateKey = new MoveStruct({
 export const BitcoinState = new MoveStruct({
     name: `${$moduleName}::BitcoinState`,
     fields: {
+        /**
+         * Extension point: dynamic fields can be attached here so new BTC-side state can
+         * be added after the struct layout freezes at mainnet.
+         */
+        id: bcs.Address,
         deposit_queue: deposit_queue.DepositRequestQueue,
         withdrawal_queue: withdrawal_queue.WithdrawalRequestQueue,
         utxo_pool: utxo_pool.UtxoPool,

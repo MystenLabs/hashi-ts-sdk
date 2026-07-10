@@ -13,7 +13,7 @@
  *     - Authorizes the upgrade using the stored `UpgradeCap`
  * 4.  `sui::package::upgrade(UpgradeTicket, ...)` -> `UpgradeReceipt`
  *     - Performed by the Sui runtime during package publish transaction
- * 5.  `config::commit_upgrade(UpgradeReceipt)`
+ * 5.  `versioning::commit_upgrade(UpgradeReceipt)`
  *     - Commits the upgrade to the `UpgradeCap` and auto-enables the new version
  */
 
@@ -27,8 +27,16 @@ export const Upgrade = new MoveStruct({
         digest: bcs.vector(bcs.u8()),
     },
 });
+export const PackageUpgraded = new MoveStruct({
+    name: `${$moduleName}::PackageUpgraded`,
+    fields: {
+        package: bcs.Address,
+        version: bcs.u64(),
+    },
+});
 export interface ProposeArguments {
     hashi: RawTransactionArgument<string>;
+    validatorAddress: RawTransactionArgument<string>;
     digest: RawTransactionArgument<number[]>;
     metadata: RawTransactionArgument<string>;
 }
@@ -38,17 +46,18 @@ export interface ProposeOptions {
         | ProposeArguments
         | [
               hashi: RawTransactionArgument<string>,
+              validatorAddress: RawTransactionArgument<string>,
               digest: RawTransactionArgument<number[]>,
               metadata: RawTransactionArgument<string>,
           ];
 }
 export function propose(options: ProposeOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, "vector<u8>", null, "0x2::clock::Clock"] satisfies (
+    const argumentsTypes = [null, "address", "vector<u8>", null, "0x2::clock::Clock"] satisfies (
         | string
         | null
     )[];
-    const parameterNames = ["hashi", "digest", "metadata"];
+    const parameterNames = ["hashi", "validatorAddress", "digest", "metadata"];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,

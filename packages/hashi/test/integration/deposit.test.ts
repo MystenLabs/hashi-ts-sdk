@@ -79,7 +79,7 @@ describe("HashiClient.deposit (real network)", () => {
                 expect(result.Transaction.status.success).toBe(true);
 
                 const evt = result.Transaction.events?.find((e) =>
-                    e.eventType.endsWith("::deposit::DepositRequestedEvent"),
+                    e.eventType.endsWith("::deposit::DepositRequested"),
                 );
                 expect(evt).toBeDefined();
 
@@ -132,7 +132,7 @@ describe("HashiClient.deposit (real network)", () => {
     const testTimeoutMs = waitForHBtc ? DEVNET_HBTC_TIMEOUT_MS + 60_000 : 120_000;
 
     it(
-        "submits a real deposit for the configured signet UTXO and emits DepositRequestedEvent",
+        "submits a real deposit for the configured signet UTXO and emits DepositRequested",
         async () => {
             const client = makeClient();
             const signer = makeSigner();
@@ -157,7 +157,7 @@ describe("HashiClient.deposit (real network)", () => {
             expect(result.Transaction.status.success).toBe(true);
 
             const evt = result.Transaction.events?.find((e) =>
-                e.eventType.endsWith("::deposit::DepositRequestedEvent"),
+                e.eventType.endsWith("::deposit::DepositRequested"),
             );
             expect(evt).toBeDefined();
 

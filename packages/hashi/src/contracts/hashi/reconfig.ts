@@ -2,11 +2,21 @@
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
 
-/** Module: reconfig */
+/**
+ * Committee reconfiguration entry points. `start_reconfig` forms the next
+ * committee from Sui's active validator set (pinning the governed MPC parameters
+ * for the new epoch), `submit_committee_handoff` records the outgoing committee's
+ * certificate approving the incoming committee, and `end_reconfig` verifies the
+ * new committee's certificate over the MPC threshold public key and activates the
+ * epoch. The initial (genesis) reconfig skips the handoff — no prior committee
+ * exists — and is gated on the publisher's launch switch
+ * (`hashi::finish_publish`).
+ */
 
 import { MoveStruct, normalizeMoveArguments, type RawTransactionArgument } from "../utils/index.js";
 import { bcs } from "@mysten/sui/bcs";
 import { type Transaction } from "@mysten/sui/transactions";
+import * as committee from "./committee.js";
 const $moduleName = "@local-pkg/hashi::reconfig";
 export const ReconfigCompletionMessage = new MoveStruct({
     name: `${$moduleName}::ReconfigCompletionMessage`,
@@ -17,15 +27,22 @@ export const ReconfigCompletionMessage = new MoveStruct({
         mpc_public_key: bcs.vector(bcs.u8()),
     },
 });
-export const StartReconfigEvent = new MoveStruct({
-    name: `${$moduleName}::StartReconfigEvent`,
+export const CommitteeTransitionRequest = new MoveStruct({
+    name: `${$moduleName}::CommitteeTransitionRequest`,
+    fields: {
+        new_committee: committee.Committee,
+    },
+});
+export const ReconfigStarted = new MoveStruct({
+    name: `${$moduleName}::ReconfigStarted`,
     fields: {
         epoch: bcs.u64(),
     },
 });
-export const EndReconfigEvent = new MoveStruct({
-    name: `${$moduleName}::EndReconfigEvent`,
+export const ReconfigEnded = new MoveStruct({
+    name: `${$moduleName}::ReconfigEnded`,
     fields: {
+        from_epoch: bcs.u64(),
         epoch: bcs.u64(),
         /** The MPC committee's threshold public key. */
         mpc_public_key: bcs.vector(bcs.u8()),
@@ -53,7 +70,7 @@ export function startReconfig(options: StartReconfigOptions) {
 export interface EndReconfigArguments {
     self: RawTransactionArgument<string>;
     mpcPublicKey: RawTransactionArgument<number[]>;
-    cert: RawTransactionArgument<string>;
+    mpcCert: RawTransactionArgument<string>;
 }
 export interface EndReconfigOptions {
     package?: string;
@@ -62,18 +79,43 @@ export interface EndReconfigOptions {
         | [
               self: RawTransactionArgument<string>,
               mpcPublicKey: RawTransactionArgument<number[]>,
-              cert: RawTransactionArgument<string>,
+              mpcCert: RawTransactionArgument<string>,
           ];
 }
 export function endReconfig(options: EndReconfigOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
     const argumentsTypes = [null, "vector<u8>", null] satisfies (string | null)[];
-    const parameterNames = ["self", "mpcPublicKey", "cert"];
+    const parameterNames = ["self", "mpcPublicKey", "mpcCert"];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,
             module: "reconfig",
             function: "end_reconfig",
+            arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        });
+}
+export interface SubmitCommitteeHandoffArguments {
+    self: RawTransactionArgument<string>;
+    committeeHandoffCert: RawTransactionArgument<string>;
+}
+export interface SubmitCommitteeHandoffOptions {
+    package?: string;
+    arguments:
+        | SubmitCommitteeHandoffArguments
+        | [
+              self: RawTransactionArgument<string>,
+              committeeHandoffCert: RawTransactionArgument<string>,
+          ];
+}
+export function submitCommitteeHandoff(options: SubmitCommitteeHandoffOptions) {
+    const packageAddress = options.package ?? "@local-pkg/hashi";
+    const argumentsTypes = [null, null] satisfies (string | null)[];
+    const parameterNames = ["self", "committeeHandoffCert"];
+    return (tx: Transaction) =>
+        tx.moveCall({
+            package: packageAddress,
+            module: "reconfig",
+            function: "submit_committee_handoff",
             arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         });
 }

@@ -1,6 +1,17 @@
 /**************************************************************
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
+
+/**
+ * Generic quorum-voting machinery shared by every governance action. A
+ * `Proposal<T>` wraps a typed payload `T` (defined by the proposal-type modules
+ * under `types/`) together with the votes it has gathered; committee members vote
+ * by weight, and once the proposal's quorum threshold is reached it can be
+ * executed exactly once, releasing the payload to the executing module and
+ * archiving the proposal. Proposals expire after seven days, after which
+ * unexecuted ones may be deleted.
+ */
+
 import { type BcsType, bcs } from "@mysten/sui/bcs";
 import { MoveStruct, normalizeMoveArguments, type RawTransactionArgument } from "../utils/index.js";
 import { type Transaction } from "@mysten/sui/transactions";
@@ -14,30 +25,79 @@ export function Proposal<T extends BcsType<any>>(...typeParameters: [T]) {
             creator: bcs.Address,
             votes: bcs.vector(bcs.Address),
             quorum_threshold_bps: bcs.u64(),
-            timestamp_ms: bcs.u64(),
+            created_timestamp_ms: bcs.u64(),
+            /** Clock timestamp at execution. `None` until the proposal executes. */
+            executed_timestamp_ms: bcs.option(bcs.u64()),
             metadata: vec_map.VecMap(bcs.string(), bcs.string()),
             data: typeParameters[0],
         },
     });
 }
+export const ProposalCreated = new MoveStruct({
+    name: `${$moduleName}::ProposalCreated<phantom T>`,
+    fields: {
+        proposal_id: bcs.Address,
+        timestamp_ms: bcs.u64(),
+    },
+});
+export const VoteCast = new MoveStruct({
+    name: `${$moduleName}::VoteCast<phantom T>`,
+    fields: {
+        proposal_id: bcs.Address,
+        voter: bcs.Address,
+    },
+});
+export const VoteRemoved = new MoveStruct({
+    name: `${$moduleName}::VoteRemoved<phantom T>`,
+    fields: {
+        proposal_id: bcs.Address,
+        voter: bcs.Address,
+    },
+});
+export const ProposalDeleted = new MoveStruct({
+    name: `${$moduleName}::ProposalDeleted<phantom T>`,
+    fields: {
+        proposal_id: bcs.Address,
+    },
+});
+export function ProposalExecuted<T extends BcsType<any>>(...typeParameters: [T]) {
+    return new MoveStruct({
+        name: `${$moduleName}::ProposalExecuted<${typeParameters[0].name as T["name"]}>`,
+        fields: {
+            proposal_id: bcs.Address,
+            data: typeParameters[0],
+        },
+    });
+}
+export const QuorumReached = new MoveStruct({
+    name: `${$moduleName}::QuorumReached<phantom T>`,
+    fields: {
+        proposal_id: bcs.Address,
+    },
+});
 export interface VoteArguments {
     hashi: RawTransactionArgument<string>;
+    validatorAddress: RawTransactionArgument<string>;
     proposalId: RawTransactionArgument<string>;
 }
 export interface VoteOptions {
     package?: string;
     arguments:
         | VoteArguments
-        | [hashi: RawTransactionArgument<string>, proposalId: RawTransactionArgument<string>];
+        | [
+              hashi: RawTransactionArgument<string>,
+              validatorAddress: RawTransactionArgument<string>,
+              proposalId: RawTransactionArgument<string>,
+          ];
     typeArguments: [string];
 }
 export function vote(options: VoteOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, "0x2::object::ID", "0x2::clock::Clock"] satisfies (
+    const argumentsTypes = [null, "address", "0x2::object::ID", "0x2::clock::Clock"] satisfies (
         | string
         | null
     )[];
-    const parameterNames = ["hashi", "proposalId"];
+    const parameterNames = ["hashi", "validatorAddress", "proposalId"];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,
@@ -49,69 +109,29 @@ export function vote(options: VoteOptions) {
 }
 export interface RemoveVoteArguments {
     hashi: RawTransactionArgument<string>;
+    validatorAddress: RawTransactionArgument<string>;
     proposalId: RawTransactionArgument<string>;
 }
 export interface RemoveVoteOptions {
     package?: string;
     arguments:
         | RemoveVoteArguments
-        | [hashi: RawTransactionArgument<string>, proposalId: RawTransactionArgument<string>];
+        | [
+              hashi: RawTransactionArgument<string>,
+              validatorAddress: RawTransactionArgument<string>,
+              proposalId: RawTransactionArgument<string>,
+          ];
     typeArguments: [string];
 }
 export function removeVote(options: RemoveVoteOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, "0x2::object::ID"] satisfies (string | null)[];
-    const parameterNames = ["hashi", "proposalId"];
+    const argumentsTypes = [null, "address", "0x2::object::ID"] satisfies (string | null)[];
+    const parameterNames = ["hashi", "validatorAddress", "proposalId"];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,
             module: "proposal",
             function: "remove_vote",
-            arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-            typeArguments: options.typeArguments,
-        });
-}
-export interface QuorumReachedArguments {
-    proposal: RawTransactionArgument<string>;
-    hashi: RawTransactionArgument<string>;
-}
-export interface QuorumReachedOptions {
-    package?: string;
-    arguments:
-        | QuorumReachedArguments
-        | [proposal: RawTransactionArgument<string>, hashi: RawTransactionArgument<string>];
-    typeArguments: [string];
-}
-export function quorumReached(options: QuorumReachedOptions) {
-    const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, null] satisfies (string | null)[];
-    const parameterNames = ["proposal", "hashi"];
-    return (tx: Transaction) =>
-        tx.moveCall({
-            package: packageAddress,
-            module: "proposal",
-            function: "quorum_reached",
-            arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-            typeArguments: options.typeArguments,
-        });
-}
-export interface IsExpiredArguments {
-    proposal: RawTransactionArgument<string>;
-}
-export interface IsExpiredOptions {
-    package?: string;
-    arguments: IsExpiredArguments | [proposal: RawTransactionArgument<string>];
-    typeArguments: [string];
-}
-export function isExpired(options: IsExpiredOptions) {
-    const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, "0x2::clock::Clock"] satisfies (string | null)[];
-    const parameterNames = ["proposal"];
-    return (tx: Transaction) =>
-        tx.moveCall({
-            package: packageAddress,
-            module: "proposal",
-            function: "is_expired",
             arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
             typeArguments: options.typeArguments,
         });
@@ -139,27 +159,6 @@ export function deleteExpired(options: DeleteExpiredOptions) {
             package: packageAddress,
             module: "proposal",
             function: "delete_expired",
-            arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-            typeArguments: options.typeArguments,
-        });
-}
-export interface VotesArguments {
-    proposal: RawTransactionArgument<string>;
-}
-export interface VotesOptions {
-    package?: string;
-    arguments: VotesArguments | [proposal: RawTransactionArgument<string>];
-    typeArguments: [string];
-}
-export function votes(options: VotesOptions) {
-    const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null] satisfies (string | null)[];
-    const parameterNames = ["proposal"];
-    return (tx: Transaction) =>
-        tx.moveCall({
-            package: packageAddress,
-            module: "proposal",
-            function: "votes",
             arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
             typeArguments: options.typeArguments,
         });

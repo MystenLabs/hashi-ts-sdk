@@ -21,6 +21,7 @@ export const EmergencyPause = new MoveStruct({
 });
 export interface ProposeArguments {
     hashi: RawTransactionArgument<string>;
+    validatorAddress: RawTransactionArgument<string>;
     pause: RawTransactionArgument<boolean>;
     metadata: RawTransactionArgument<string>;
 }
@@ -30,14 +31,18 @@ export interface ProposeOptions {
         | ProposeArguments
         | [
               hashi: RawTransactionArgument<string>,
+              validatorAddress: RawTransactionArgument<string>,
               pause: RawTransactionArgument<boolean>,
               metadata: RawTransactionArgument<string>,
           ];
 }
 export function propose(options: ProposeOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, "bool", null, "0x2::clock::Clock"] satisfies (string | null)[];
-    const parameterNames = ["hashi", "pause", "metadata"];
+    const argumentsTypes = [null, "address", "bool", null, "0x2::clock::Clock"] satisfies (
+        | string
+        | null
+    )[];
+    const parameterNames = ["hashi", "validatorAddress", "pause", "metadata"];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,

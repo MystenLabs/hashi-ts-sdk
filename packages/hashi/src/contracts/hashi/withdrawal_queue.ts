@@ -1,6 +1,16 @@
 /**************************************************************
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
+
+/**
+ * Storage and state machine for Bitcoin withdrawals. Holds `WithdrawalRequest`
+ * objects as they move from Requested through Approved, Processing, Signed, and
+ * Confirmed, plus the `WithdrawalTransaction` objects that batch them: each
+ * transaction tracks its input UTXOs, withdrawal and change outputs, and the
+ * incrementally collected MPC and guardian signatures. Certificate verification
+ * and funds movement are driven by `hashi::withdraw`.
+ */
+
 import {
     MoveStruct,
     MoveEnum,
@@ -13,8 +23,10 @@ import * as object_bag from "./deps/sui/object_bag.js";
 import * as object_bag_1 from "./deps/sui/object_bag.js";
 import * as object_bag_2 from "./deps/sui/object_bag.js";
 import * as object_bag_3 from "./deps/sui/object_bag.js";
+import * as committee from "./committee.js";
 import * as balance from "./deps/sui/balance.js";
 import * as utxo from "./utxo.js";
+import * as mpc_signing from "./mpc_signing.js";
 import * as utxo_1 from "./utxo.js";
 import * as utxo_2 from "./utxo.js";
 const $moduleName = "@local-pkg/hashi::withdrawal_queue";
@@ -64,8 +76,18 @@ export const WithdrawalRequest = new MoveStruct({
         sender: bcs.Address,
         btc_amount: bcs.u64(),
         bitcoin_address: bcs.vector(bcs.u8()),
-        timestamp_ms: bcs.u64(),
+        created_timestamp_ms: bcs.u64(),
         status: WithdrawalStatus,
+        /**
+         * Committee certificate recorded at approval time. `None` until `approve_request`
+         * has been called.
+         */
+        approval_cert: bcs.option(committee.CommitteeSignature),
+        /**
+         * Clock timestamp at the moment of approval. `None` until `approve_request` has
+         * been called.
+         */
+        approved_timestamp_ms: bcs.option(bcs.u64()),
         withdrawal_txn_id: bcs.option(bcs.Address),
         sui_tx_digest: bcs.vector(bcs.u8()),
         btc: balance.Balance,
@@ -84,26 +106,36 @@ export const WithdrawalTransaction = new MoveStruct({
          */
         inputs: bcs.vector(utxo.Utxo),
         withdrawal_outputs: bcs.vector(OutputUtxo),
-        change_output: bcs.option(OutputUtxo),
-        timestamp_ms: bcs.u64(),
+        /**
+         * Change outputs back to the bridge, in BTC transaction order. These are the
+         * trailing outputs of the transaction: change output `j` sits at vout
+         * `withdrawal_outputs.length() + j`. Empty when the transaction has no change.
+         */
+        change_outputs: bcs.vector(OutputUtxo),
+        created_timestamp_ms: bcs.u64(),
+        /**
+         * Clock timestamp at which the transaction became fully signed (guardian
+         * signatures attached). `None` until `finalize_withdrawal`.
+         */
+        signed_timestamp_ms: bcs.option(bcs.u64()),
+        /**
+         * Clock timestamp at which the Bitcoin transaction was confirmed. `None` until
+         * `confirm_withdrawal`.
+         */
+        confirmed_timestamp_ms: bcs.option(bcs.u64()),
         randomness: bcs.vector(bcs.u8()),
         /**
-         * Per-input Schnorr signatures from the MPC committee. Populated by
-         * `sign_withdrawal` once both the MPC and the guardian have signed.
+         * Per-input MPC committee signatures, accumulated incrementally and out-of-order
+         * across checkpoints/leaders/epochs. Owns the presignature bookkeeping (see
+         * `hashi::mpc_signing`).
          */
-        signatures: bcs.option(bcs.vector(bcs.vector(bcs.u8()))),
+        signing: mpc_signing.SigningBatch,
         /**
-         * Per-input Schnorr signatures from the guardian enclave. Same length as
-         * `signatures`; together they form the 2-of-2 taproot witness. Populated by
-         * `sign_withdrawal` alongside `signatures`.
+         * Per-input Schnorr signatures from the guardian enclave. Same length as the MPC
+         * signatures; together they form the 2-of-2 taproot witness. Written once at
+         * `finalize_withdrawal` (the guardian signs in one shot).
          */
         guardian_signatures: bcs.option(bcs.vector(bcs.vector(bcs.u8()))),
-        /**
-         * Global presignature start index assigned at construction time. Input `i` uses
-         * presig at index `presig_start_index + i`.
-         */
-        presig_start_index: bcs.u64(),
-        epoch: bcs.u64(),
     },
 });
 export const CommittedRequestInfo = new MoveStruct({
@@ -113,8 +145,8 @@ export const CommittedRequestInfo = new MoveStruct({
         bitcoin_address: bcs.vector(bcs.u8()),
     },
 });
-export const WithdrawalRequestedEvent = new MoveStruct({
-    name: `${$moduleName}::WithdrawalRequestedEvent`,
+export const WithdrawalRequested = new MoveStruct({
+    name: `${$moduleName}::WithdrawalRequested`,
     fields: {
         request_id: bcs.Address,
         btc_amount: bcs.u64(),
@@ -124,27 +156,35 @@ export const WithdrawalRequestedEvent = new MoveStruct({
         sui_tx_digest: bcs.vector(bcs.u8()),
     },
 });
-export const WithdrawalApprovedEvent = new MoveStruct({
-    name: `${$moduleName}::WithdrawalApprovedEvent`,
+export const WithdrawalApproved = new MoveStruct({
+    name: `${$moduleName}::WithdrawalApproved`,
     fields: {
         request_id: bcs.Address,
     },
 });
-export const WithdrawalPickedForProcessingEvent = new MoveStruct({
-    name: `${$moduleName}::WithdrawalPickedForProcessingEvent`,
+export const WithdrawalPickedForProcessing = new MoveStruct({
+    name: `${$moduleName}::WithdrawalPickedForProcessing`,
     fields: {
         withdrawal_txn_id: bcs.Address,
         txid: bcs.Address,
         request_ids: bcs.vector(bcs.Address),
         inputs: bcs.vector(utxo_1.Utxo),
         withdrawal_outputs: bcs.vector(OutputUtxo),
-        change_output: bcs.option(OutputUtxo),
+        change_outputs: bcs.vector(OutputUtxo),
         timestamp_ms: bcs.u64(),
         randomness: bcs.vector(bcs.u8()),
     },
 });
-export const WithdrawalSignedEvent = new MoveStruct({
-    name: `${$moduleName}::WithdrawalSignedEvent`,
+export const WithdrawalInputsSigned = new MoveStruct({
+    name: `${$moduleName}::WithdrawalInputsSigned`,
+    fields: {
+        withdrawal_txn_id: bcs.Address,
+        signed_count: bcs.u64(),
+        num_inputs: bcs.u64(),
+    },
+});
+export const WithdrawalSigned = new MoveStruct({
+    name: `${$moduleName}::WithdrawalSigned`,
     fields: {
         withdrawal_txn_id: bcs.Address,
         request_ids: bcs.vector(bcs.Address),
@@ -158,26 +198,26 @@ export const WithdrawalSignedEvent = new MoveStruct({
         guardian_signatures: bcs.vector(bcs.vector(bcs.u8())),
     },
 });
-export const WithdrawalPresigsReassignedEvent = new MoveStruct({
-    name: `${$moduleName}::WithdrawalPresigsReassignedEvent`,
+export const WithdrawalPresigsReassigned = new MoveStruct({
+    name: `${$moduleName}::WithdrawalPresigsReassigned`,
     fields: {
         withdrawal_txn_id: bcs.Address,
         epoch: bcs.u64(),
         presig_start_index: bcs.u64(),
     },
 });
-export const WithdrawalConfirmedEvent = new MoveStruct({
-    name: `${$moduleName}::WithdrawalConfirmedEvent`,
+export const WithdrawalConfirmed = new MoveStruct({
+    name: `${$moduleName}::WithdrawalConfirmed`,
     fields: {
         withdrawal_txn_id: bcs.Address,
         txid: bcs.Address,
-        change_utxo_id: bcs.option(utxo_2.UtxoId),
+        change_utxo_ids: bcs.vector(utxo_2.UtxoId),
         request_ids: bcs.vector(bcs.Address),
-        change_utxo_amount: bcs.option(bcs.u64()),
+        change_utxo_amounts: bcs.vector(bcs.u64()),
     },
 });
-export const WithdrawalCancelledEvent = new MoveStruct({
-    name: `${$moduleName}::WithdrawalCancelledEvent`,
+export const WithdrawalCancelled = new MoveStruct({
+    name: `${$moduleName}::WithdrawalCancelled`,
     fields: {
         request_id: bcs.Address,
         requester_address: bcs.Address,
@@ -206,25 +246,6 @@ export function outputUtxo(options: OutputUtxoOptions) {
             package: packageAddress,
             module: "withdrawal_queue",
             function: "output_utxo",
-            arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-        });
-}
-export interface IsApprovedArguments {
-    self: RawTransactionArgument<string>;
-}
-export interface IsApprovedOptions {
-    package?: string;
-    arguments: IsApprovedArguments | [self: RawTransactionArgument<string>];
-}
-export function isApproved(options: IsApprovedOptions) {
-    const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null] satisfies (string | null)[];
-    const parameterNames = ["self"];
-    return (tx: Transaction) =>
-        tx.moveCall({
-            package: packageAddress,
-            module: "withdrawal_queue",
-            function: "is_approved",
             arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         });
 }
