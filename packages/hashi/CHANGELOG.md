@@ -1,5 +1,15 @@
 # @mysten-incubation/hashi
 
+## 0.4.0
+
+### Minor Changes
+
+- 874ec08: feat: add a `client.hashi.guardian.*` namespace (`info`, `limiterStatus`, `canWithdraw`) that reads the guardian's rate-limiter headroom from its read-only `/info` endpoint, resolving the guardian URL from `guardianUrl`, a `guardianInfoProvider`, or the on-chain `guardian_url` config
+
+### Patch Changes
+
+- 8f7606f: Track the redeployed devnet contracts: regenerate bindings against hashi's `testnet` tip (`0e67b619`) (`config_value::Value` gained `U128`/`U256`, shifting the BCS tags the SDK decodes the on-chain config with), follow the `DepositRequested`/`WithdrawalRequested` event renames and request-object field renames, and point `NETWORK_CONFIG.devnet` at the new package and Hashi object.
+
 ## 0.3.1
 
 ### Patch Changes
