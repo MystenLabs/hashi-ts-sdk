@@ -22,6 +22,10 @@ export interface HashiClientOptions<Name = "HashiClient"> {
     btcRpcUrl?: string;
     /** Override the Sui GraphQL endpoint URL (defaults to `https://fullnode.{network}.sui.io:443/graphql`). */
     graphqlUrl?: string;
+    /** Guardian origin URL (e.g. `https://hashi-guardian-devnet.mystenlabs.com`); the SDK appends `/info`. Takes precedence over the on-chain `guardian_url` config. */
+    guardianUrl?: string;
+    /** Custom guardian-info source. When set, the SDK calls this instead of fetching `/info` — useful for caching, tests, or bespoke transports. */
+    guardianInfoProvider?: GuardianInfoProvider;
 }
 
 /**
@@ -277,4 +281,72 @@ export interface UtxoLookupResult {
     readonly vout: number;
     /** Amount in satoshis. */
     readonly amountSats: bigint;
+}
+
+// ---------------------------------------------------------------------------
+// Guardian rate limiter
+// ---------------------------------------------------------------------------
+
+export interface GuardianLimiterState {
+    /** Available tokens in satoshis at the snapshot instant. */
+    readonly numTokensAvailableSats: bigint;
+    /** Unix seconds when the bucket was last updated. */
+    readonly lastUpdatedAtSecs: bigint;
+    /** Next expected withdrawal sequence number. */
+    readonly nextSeq: bigint;
+}
+
+export interface GuardianLimiterConfig {
+    /** Token refill rate in satoshis per second. */
+    readonly refillRateSatsPerSec: bigint;
+    /** Maximum bucket capacity in satoshis. */
+    readonly maxBucketCapacitySats: bigint;
+}
+
+/** Raw limiter state + config, as returned by the guardian `/info` endpoint. */
+export interface GuardianLimiterRaw {
+    readonly state: GuardianLimiterState;
+    readonly config: GuardianLimiterConfig;
+}
+
+/**
+ * Curated guardian identity + limiter, parsed from `GET {guardianUrl}/info`.
+ * `limiter` is `null` until the guardian is provisioned/activated.
+ */
+export interface RawGuardianInfo {
+    readonly limiter: GuardianLimiterRaw | null;
+    /** Guardian build git revision (untrusted, enclave-self-reported). */
+    readonly gitRevision: string;
+    /** Current committee epoch; `null` before the guardian is initialized. */
+    readonly committeeEpoch: bigint | null;
+    /** Guardian x-only 32-byte BTC pubkey (hex); `null` before provisioning. */
+    readonly btcPubkey: string | null;
+    /** Guardian ed25519 32-byte signing pubkey (hex). */
+    readonly signingPubKey: string;
+    /** `GuardianInfo` signing timestamp (ms since epoch); `null` if absent. */
+    readonly signedAtMs: bigint | null;
+}
+
+/** Pluggable source for {@link RawGuardianInfo}; see `HashiClientOptions.guardianInfoProvider`. */
+export type GuardianInfoProvider = () => Promise<RawGuardianInfo>;
+
+/** Derived limiter view returned by `client.hashi.guardian.limiterStatus()`. */
+export interface GuardianLimiterSnapshot {
+    readonly state: GuardianLimiterState;
+    readonly config: GuardianLimiterConfig;
+    /** Projected available tokens (sats), accounting for refill since `lastUpdatedAtSecs`. */
+    readonly availableNowSats: bigint;
+    /** Bucket fill as a percentage in [0, 100]. */
+    readonly bucketFillPercent: number;
+    /** Unix seconds at which the bucket refills to full (assuming no withdrawals). `null` if already full or the refill rate is 0. */
+    readonly fullAtSecs: bigint | null;
+}
+
+/** Result of `client.hashi.guardian.canWithdraw(amountSats)`. */
+export interface GuardianWithdrawCheck {
+    readonly allowed: boolean;
+    /** Current available capacity in sats. */
+    readonly availableNowSats: bigint;
+    /** Seconds until `amountSats` is available; `0n` if available now; `null` if it exceeds max capacity (or the refill rate is 0). */
+    readonly estimatedWaitSecs: bigint | null;
 }

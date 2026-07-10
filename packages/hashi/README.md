@@ -45,7 +45,7 @@ await client.hashi.deposit({
 });
 ```
 
-End-user actions only: **deposit**, **request withdrawal**, **cancel withdrawal**.
+End-user actions only: **deposit**, **request withdrawal**, **cancel withdrawal**. An optional `client.hashi.guardian.*` namespace reads the guardian's rate-limiter headroom (`limiterStatus`, `canWithdraw`) — see the root README.
 
 ## Documentation
 

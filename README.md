@@ -204,14 +204,15 @@ const snap = await client.hashi.view.all();
 
 Direct methods throw typed errors before signing whenever a precondition can be checked client-side. `instanceof` to distinguish:
 
-| Error                        | Thrown when                                                                |
-| ---------------------------- | -------------------------------------------------------------------------- |
-| `InvalidParamsError`         | `txid`/`recipient` not 0x-prefixed 32-byte hex, or `utxos` empty/duplicate |
-| `InvalidBitcoinAddressError` | `bitcoinAddress` fails bech32(m) decode or HRP mismatches the BTC network  |
-| `HashiPausedError`           | Governance has paused the operation (`deposit` or `withdraw`)              |
-| `AmountBelowMinimumError`    | A UTXO or withdrawal amount is below the on-chain minimum                  |
-| `HashiFetchError`            | The Hashi shared object can't be read or has an unexpected shape           |
-| `HashiConfigError`           | A governance config entry is missing or malformed                          |
+| Error                        | Thrown when                                                                                                |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `InvalidParamsError`         | `txid`/`recipient` not 0x-prefixed 32-byte hex, or `utxos` empty/duplicate                                 |
+| `InvalidBitcoinAddressError` | `bitcoinAddress` fails bech32(m) decode or HRP mismatches the BTC network                                  |
+| `HashiPausedError`           | Governance has paused the operation (`deposit` or `withdraw`)                                              |
+| `AmountBelowMinimumError`    | A UTXO or withdrawal amount is below the on-chain minimum                                                  |
+| `HashiFetchError`            | The Hashi shared object can't be read or has an unexpected shape                                           |
+| `HashiConfigError`           | A governance config entry is missing or malformed                                                          |
+| `HashiGuardianError`         | The guardian `/info` can't be resolved, reached, or parsed, or the limiter isn't initialized (see `.code`) |
 
 ## Advanced: composable transactions
 
@@ -244,6 +245,32 @@ const confirmations = await client.hashi.bitcoin.confirmations(btcTxid);
 ```
 
 Calling any `bitcoin.*` method without `btcRpcUrl` configured throws.
+
+## Guardian rate limiter (optional)
+
+Withdrawals are co-signed by the Hashi **guardian**, which throttles signing with a token-bucket rate limiter. When the client can resolve a guardian URL — from `guardianUrl`, a custom `guardianInfoProvider`, or the on-chain `guardian_url` config — the `client.hashi.guardian.*` namespace reads the guardian's public, read-only `/info` endpoint to surface that limiter's headroom.
+
+```ts
+const client = new SuiGrpcClient({
+  network: "devnet",
+  baseUrl: "https://fullnode.devnet.sui.io:443",
+}).$extend(
+  hashi({ network: "devnet", guardianUrl: "https://hashi-guardian-devnet.mystenlabs.com" }),
+);
+
+// Guardian identity + limiter. `limiter` is null before the guardian is provisioned.
+const info = await client.hashi.guardian.info();
+
+// Projected capacity now, bucket fill %, and the refill-to-full ETA.
+const status = await client.hashi.guardian.limiterStatus();
+// { availableNowSats, bucketFillPercent, fullAtSecs, state, config }
+
+// Can the guardian sign a 50,000-sat withdrawal right now?
+const check = await client.hashi.guardian.canWithdraw(50_000n);
+// { allowed, availableNowSats, estimatedWaitSecs }
+```
+
+`guardianUrl` overrides the on-chain `guardian_url`; a `guardianInfoProvider` overrides both (useful for caching or a custom transport). The on-chain `guardian_url` is only published at launch, so a client constructed beforehand re-reads the chain on each call until it resolves — throwing `HashiGuardianError` (`code: "not-configured"`) meanwhile — then caches the URL once found. `limiterStatus()` and `canWithdraw()` throw `HashiGuardianError` (`code: "not-initialized"`) before the guardian is provisioned — use `guardian.info()`, whose `limiter` is `null`, to detect that state without a try/catch.
 
 ## Bitcoin address derivation
 

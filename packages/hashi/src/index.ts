@@ -3,11 +3,12 @@ export {
     AmountBelowMinimumError,
     HashiConfigError,
     HashiFetchError,
+    HashiGuardianError,
     HashiPausedError,
     InvalidBitcoinAddressError,
     InvalidParamsError,
 } from "./errors.js";
-export type { AmountViolation, InvalidBitcoinAddressCode } from "./errors.js";
+export type { AmountViolation, GuardianErrorCode, InvalidBitcoinAddressCode } from "./errors.js";
 export {
     arkworksToSec1Compressed,
     bitcoinAddressToWitnessProgram,
@@ -17,6 +18,7 @@ export {
     witnessProgramToAddress,
 } from "./bitcoin.js";
 export type { DepositAddressInputs } from "./bitcoin.js";
+export { estimateWaitSecs, fetchGuardianInfo, projectCapacity } from "./guardian.js";
 export type {
     BitcoinNetwork,
     CancelWithdrawalParams,
@@ -26,9 +28,16 @@ export type {
     DepositParams,
     DepositStatus,
     GovernanceConfig,
+    GuardianInfoProvider,
+    GuardianLimiterConfig,
+    GuardianLimiterRaw,
+    GuardianLimiterSnapshot,
+    GuardianLimiterState,
+    GuardianWithdrawCheck,
     HashiClientOptions,
     HbtcBalance,
     NetworkConfig,
+    RawGuardianInfo,
     SuiNetwork,
     TransactionHistoryItem,
     UtxoId,
