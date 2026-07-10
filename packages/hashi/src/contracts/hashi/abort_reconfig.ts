@@ -23,6 +23,7 @@ export const AbortReconfig = new MoveStruct({
 });
 export interface ProposeArguments {
     hashi: RawTransactionArgument<string>;
+    validatorAddress: RawTransactionArgument<string>;
     epoch: RawTransactionArgument<number | bigint>;
     metadata: RawTransactionArgument<string>;
 }
@@ -32,14 +33,18 @@ export interface ProposeOptions {
         | ProposeArguments
         | [
               hashi: RawTransactionArgument<string>,
+              validatorAddress: RawTransactionArgument<string>,
               epoch: RawTransactionArgument<number | bigint>,
               metadata: RawTransactionArgument<string>,
           ];
 }
 export function propose(options: ProposeOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, "u64", null, "0x2::clock::Clock"] satisfies (string | null)[];
-    const parameterNames = ["hashi", "epoch", "metadata"];
+    const argumentsTypes = [null, "address", "u64", null, "0x2::clock::Clock"] satisfies (
+        | string
+        | null
+    )[];
+    const parameterNames = ["hashi", "validatorAddress", "epoch", "metadata"];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,

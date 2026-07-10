@@ -994,6 +994,7 @@ describe("HashiClient", () => {
             const bagFields = (id: string) => ({ id, size: "0" });
             const objectBagFields = (id: string) => ({ id, size: "0" });
             return BitcoinState.serialize({
+                id: "0x" + "b0".repeat(32),
                 deposit_queue: {
                     requests: objectBagFields("0x" + "d1".repeat(32)),
                     processed: objectBagFields("0x" + "d2".repeat(32)),
@@ -1211,6 +1212,7 @@ describe("HashiClient", () => {
                     value: {
                         type: `${PACKAGE_ID}::bitcoin_state::BitcoinState`,
                         bcs: BitcoinState.serialize({
+                            id: "0x" + "b0".repeat(32),
                             deposit_queue: {
                                 requests: objectBagFields("0x" + "d1".repeat(32)),
                                 processed: objectBagFields("0x" + "d2".repeat(32)),
@@ -1294,7 +1296,7 @@ describe("HashiClient", () => {
                 content: DepositRequest.serialize({
                     id: DEPOSIT_REQUEST_ID,
                     sender: TEST_SUI_ADDRESS,
-                    timestamp_ms: "1000",
+                    created_timestamp_ms: "1000",
                     sui_tx_digest: Array.from(new Uint8Array(32).fill(0xdd)),
                     utxo: {
                         id: { txid: INTERNAL_TXID, vout: 7 },
@@ -1302,7 +1304,8 @@ describe("HashiClient", () => {
                         derivation_path: TEST_SUI_ADDRESS,
                     },
                     approval_cert: null,
-                    approval_timestamp_ms: null,
+                    approved_timestamp_ms: null,
+                    confirmed_timestamp_ms: null,
                 }).toBytes(),
                 previousTransaction: undefined,
                 objectBcs: undefined,
@@ -1323,8 +1326,10 @@ describe("HashiClient", () => {
                     sender: TEST_SUI_ADDRESS,
                     btc_amount: "30000",
                     bitcoin_address: Array.from(new Uint8Array(32).fill(0xcc)),
-                    timestamp_ms: "2000",
+                    created_timestamp_ms: "2000",
                     status: { $kind: "Requested", Requested: true },
+                    approval_cert: null,
+                    approved_timestamp_ms: null,
                     withdrawal_txn_id: opts?.withdrawalTxnId ?? null,
                     sui_tx_digest: Array.from(new Uint8Array(32).fill(0xee)),
                     btc: { value: "30000" },
@@ -1430,13 +1435,13 @@ describe("HashiClient", () => {
                             request_ids: [WITHDRAWAL_REQUEST_ID],
                             inputs: [],
                             withdrawal_outputs: [],
-                            change_output: null,
-                            timestamp_ms: "3000",
+                            change_outputs: [],
+                            created_timestamp_ms: "3000",
+                            signed_timestamp_ms: null,
+                            confirmed_timestamp_ms: null,
                             randomness: [],
-                            signatures: null,
+                            signing: { signatures: [], epoch: "1" },
                             guardian_signatures: null,
-                            presig_start_index: "0",
-                            epoch: "1",
                         }).toBytes(),
                         previousTransaction: undefined,
                         objectBcs: undefined,
@@ -1586,7 +1591,7 @@ describe("HashiClient", () => {
                 Transaction: {
                     events: [
                         {
-                            eventType: `${PACKAGE_ID}::deposit::DepositRequestedEvent`,
+                            eventType: `${PACKAGE_ID}::deposit::DepositRequested`,
                             json: {
                                 request_id: REQUEST_ID,
                                 utxo_id: { txid: "0x" + "ab".repeat(32), vout: 0 },
@@ -1600,7 +1605,7 @@ describe("HashiClient", () => {
             } as never);
 
             vi.spyOn(DepositRequest, "get").mockResolvedValueOnce({
-                json: { approval_timestamp_ms: null },
+                json: { approved_timestamp_ms: null },
             } as never);
 
             const getDfSpy = vi.spyOn(client.core, "getDynamicField");
@@ -1609,6 +1614,7 @@ describe("HashiClient", () => {
                 dynamicField: {
                     value: {
                         bcs: BitcoinState.serialize({
+                            id: "0x" + "b0".repeat(32),
                             deposit_queue: {
                                 requests: { id: "0x" + "d1".repeat(32), size: "0" },
                                 processed: { id: "0x" + "d2".repeat(32), size: "0" },
@@ -1647,7 +1653,7 @@ describe("HashiClient", () => {
                 Transaction: {
                     events: [
                         {
-                            eventType: `${PACKAGE_ID}::deposit::DepositRequestedEvent`,
+                            eventType: `${PACKAGE_ID}::deposit::DepositRequested`,
                             json: {
                                 request_id: REQUEST_ID,
                                 utxo_id: { txid: "0x" + "ab".repeat(32), vout: 0 },
@@ -1661,7 +1667,7 @@ describe("HashiClient", () => {
             } as never);
 
             vi.spyOn(DepositRequest, "get").mockResolvedValueOnce({
-                json: { approval_timestamp_ms: "5000" },
+                json: { approved_timestamp_ms: "5000" },
             } as never);
 
             mockHashiWithConfig(WELL_FORMED_CONFIG);
@@ -1672,6 +1678,7 @@ describe("HashiClient", () => {
                 dynamicField: {
                     value: {
                         bcs: BitcoinState.serialize({
+                            id: "0x" + "b0".repeat(32),
                             deposit_queue: {
                                 requests: { id: "0x" + "d1".repeat(32), size: "0" },
                                 processed: { id: "0x" + "d2".repeat(32), size: "0" },
@@ -1706,7 +1713,7 @@ describe("HashiClient", () => {
                 Transaction: {
                     events: [
                         {
-                            eventType: `${PACKAGE_ID}::deposit::DepositRequestedEvent`,
+                            eventType: `${PACKAGE_ID}::deposit::DepositRequested`,
                             json: {
                                 request_id: REQUEST_ID,
                                 utxo_id: { txid: "0x" + "ab".repeat(32), vout: 0 },
@@ -1742,7 +1749,7 @@ describe("HashiClient", () => {
                 Transaction: {
                     events: [
                         {
-                            eventType: `${PACKAGE_ID}::withdrawal_queue::WithdrawalRequestedEvent`,
+                            eventType: `${PACKAGE_ID}::withdrawal_queue::WithdrawalRequested`,
                             json: {
                                 request_id: REQUEST_ID,
                                 btc_amount: "30000",
@@ -1768,7 +1775,7 @@ describe("HashiClient", () => {
                 Transaction: {
                     events: [
                         {
-                            eventType: `${PACKAGE_ID}::withdrawal_queue::WithdrawalRequestedEvent`,
+                            eventType: `${PACKAGE_ID}::withdrawal_queue::WithdrawalRequested`,
                             json: {
                                 request_id: REQUEST_ID,
                                 btc_amount: "30000",
@@ -1803,7 +1810,7 @@ describe("HashiClient", () => {
                 Transaction: {
                     events: [
                         {
-                            eventType: `${PACKAGE_ID}::withdrawal_queue::WithdrawalRequestedEvent`,
+                            eventType: `${PACKAGE_ID}::withdrawal_queue::WithdrawalRequested`,
                             json: {
                                 request_id: REQUEST_ID,
                                 btc_amount: "30000",

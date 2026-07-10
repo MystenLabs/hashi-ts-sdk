@@ -94,7 +94,7 @@ describe.skipIf(!isLocalnet())("HashiClient withdrawal lifecycle (localnet)", ()
         LOCALNET_HBTC_TIMEOUT_MS + 60_000,
     );
 
-    it("requestWithdrawal: emits WithdrawalRequestedEvent and burns hBTC", async () => {
+    it("requestWithdrawal: emits WithdrawalRequested and burns hBTC", async () => {
         const snap = await state.client.hashi.view.all();
         state.cancellationCooldownMs = snap.withdrawalCancellationCooldownMs;
 
@@ -122,7 +122,7 @@ describe.skipIf(!isLocalnet())("HashiClient withdrawal lifecycle (localnet)", ()
         expect(result.Transaction.status.success).toBe(true);
 
         const evt = result.Transaction.events?.find((e) =>
-            e.eventType.endsWith("::withdrawal_queue::WithdrawalRequestedEvent"),
+            e.eventType.endsWith("::withdrawal_queue::WithdrawalRequested"),
         );
         expect(evt).toBeDefined();
 
@@ -132,7 +132,7 @@ describe.skipIf(!isLocalnet())("HashiClient withdrawal lifecycle (localnet)", ()
         // event was malformed.
         const parsed = (evt as unknown as { json?: { request_id?: string } }).json;
         if (!parsed?.request_id) {
-            throw new Error(`WithdrawalRequestedEvent missing request_id: ${JSON.stringify(evt)}`);
+            throw new Error(`WithdrawalRequested missing request_id: ${JSON.stringify(evt)}`);
         }
         state.requestId = parsed.request_id;
 

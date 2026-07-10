@@ -1,12 +1,32 @@
 /**************************************************************
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
+
+/**
+ * Registry of Hashi committee state: registered member metadata (`MemberInfo`),
+ * per-epoch `Committee`s, the current epoch, the MPC threshold public key, and the
+ * pending epoch change while a reconfiguration is in flight. Members register (and
+ * rotate keys/metadata) here between epochs; `start_reconfig` builds the next
+ * committee from Sui's active validator set, and `end_reconfig` activates it —
+ * storing the outgoing committee's handoff certificate for non-initial reconfigs.
+ */
+
 import { MoveStruct } from "../utils/index.js";
 import { bcs } from "@mysten/sui/bcs";
+import * as committee from "./committee.js";
 import * as bag from "./deps/sui/bag.js";
 import * as bag_1 from "./deps/sui/bag.js";
+import * as committee_1 from "./committee.js";
 import * as group_ops from "./deps/sui/group_ops.js";
+import * as config from "./config.js";
 const $moduleName = "@local-pkg/hashi::committee_set";
+export const PendingEpochChange = new MoveStruct({
+    name: `${$moduleName}::PendingEpochChange`,
+    fields: {
+        epoch: bcs.u64(),
+        committee_handoff_cert: bcs.option(committee.CommitteeSignature),
+    },
+});
 export const CommitteeSet = new MoveStruct({
     name: `${$moduleName}::CommitteeSet`,
     fields: {
@@ -14,9 +34,22 @@ export const CommitteeSet = new MoveStruct({
         /** The current epoch. */
         epoch: bcs.u64(),
         committees: bag_1.Bag,
-        pending_epoch_change: bcs.option(bcs.u64()),
+        pending_epoch_change: bcs.option(PendingEpochChange),
         /** The MPC committee's threshold public key. */
         mpc_public_key: bcs.vector(bcs.u8()),
+    },
+});
+export const CommitteeHandoffKey = new MoveStruct({
+    name: `${$moduleName}::CommitteeHandoffKey`,
+    fields: {
+        epoch: bcs.u64(),
+    },
+});
+export const CommitteeHandoff = new MoveStruct({
+    name: `${$moduleName}::CommitteeHandoff`,
+    fields: {
+        next_epoch: bcs.u64(),
+        cert: committee_1.CommitteeSignature,
     },
 });
 export const MemberInfo = new MoveStruct({
@@ -59,5 +92,10 @@ export const MemberInfo = new MoveStruct({
          * next epoch.
          */
         next_epoch_encryption_public_key: bcs.vector(bcs.u8()),
+        /**
+         * Open-ended per-member extension slot. Empty today; lets future upgrades attach
+         * new member data (e.g. per-protocol keys) without a MemberInfoV2 migration.
+         */
+        extra_fields: config.Config,
     },
 });

@@ -251,7 +251,7 @@ export class HashiClient {
      * into a single Sui PTB. Signs with `signer` and submits, returning the
      * execution result (`$kind: "Transaction" | "FailedTransaction"`). The
      * result includes `effects` and `events` so callers can confirm
-     * `DepositRequestedEvent` without an extra round-trip.
+     * `DepositRequested` without an extra round-trip.
      *
      * The method runs three preflight stages before signing:
      *
@@ -316,7 +316,7 @@ export class HashiClient {
      * from the signer's balance and enqueues a request for the committee to
      * send `amountSats` to `bitcoinAddress` on the Bitcoin network. Signs
      * with `signer` and submits, returning the execution result including
-     * `effects` and `events` (`WithdrawalRequestedEvent`).
+     * `effects` and `events` (`WithdrawalRequested`).
      *
      * The method runs three preflight stages before signing:
      *
@@ -855,7 +855,7 @@ export class HashiClient {
         /**
          * Get the status and details of a deposit by its Sui transaction digest.
          *
-         * Fetches the `DepositRequestedEvent` from the transaction, extracts the
+         * Fetches the `DepositRequested` event from the transaction, extracts the
          * request ID, then probes on-chain state to determine whether the deposit
          * is pending (still in `requests` ObjectBag), confirmed (object exists
          * but not in requests), or expired (object destroyed).
@@ -871,7 +871,7 @@ export class HashiClient {
 
             const depositEvent = txData.events.find(
                 (e: { eventType: string }) =>
-                    e.eventType.includes("::deposit::DepositRequestedEvent"),
+                    e.eventType.includes("::deposit::DepositRequested"),
             );
             if (!depositEvent?.json) return null;
 
@@ -892,8 +892,8 @@ export class HashiClient {
                     objectId: parsed.request_id,
                 });
 
-                if (reqObj.json.approval_timestamp_ms != null) {
-                    approvalTimestampMs = BigInt(reqObj.json.approval_timestamp_ms);
+                if (reqObj.json.approved_timestamp_ms != null) {
+                    approvalTimestampMs = BigInt(reqObj.json.approved_timestamp_ms);
                 }
 
                 const [btcState, config] = await Promise.all([
@@ -943,7 +943,7 @@ export class HashiClient {
         /**
          * Get the status and details of a withdrawal by its Sui transaction digest.
          *
-         * Fetches the `WithdrawalRequestedEvent` from the transaction, extracts the
+         * Fetches the `WithdrawalRequested` event from the transaction, extracts the
          * request ID, then reads the `WithdrawalRequest` object to determine the
          * current lifecycle state. If a `WithdrawalTransaction` is linked, its
          * Bitcoin txid is populated.
@@ -959,7 +959,7 @@ export class HashiClient {
 
             const withdrawEvent = txData.events.find(
                 (e: { eventType: string }) =>
-                    e.eventType.includes("::withdrawal_queue::WithdrawalRequestedEvent"),
+                    e.eventType.includes("::withdrawal_queue::WithdrawalRequested"),
             );
             if (!withdrawEvent?.json) return null;
 
@@ -1086,7 +1086,7 @@ export class HashiClient {
          * Fetch the unified transaction history (deposits + withdrawals) for
          * a Sui address. Confirmed requests come from the on-chain
          * `user_requests` index; in-flight deposits are discovered via
-         * GraphQL `DepositRequestedEvent` queries (indexed by sender).
+         * GraphQL `DepositRequested` event queries (indexed by sender).
          */
         transactionHistory: async (suiAddress: string): Promise<TransactionHistoryItem[]> => {
             const [btcState, timeDelayMs] = await Promise.all([
@@ -1117,7 +1117,7 @@ export class HashiClient {
             //    Best-effort: if GraphQL is unavailable (e.g. localnet) we
             //    still return the confirmed set from step 1.
             try {
-                const depositEventType = `${this.#packageId}::deposit::DepositRequestedEvent`;
+                const depositEventType = `${this.#packageId}::deposit::DepositRequested`;
                 const allDepositIds = await this.#queryEventRequestIds(
                     suiAddress,
                     depositEventType,
@@ -1608,12 +1608,12 @@ function parseMpcPublicKey(raw: ArrayLike<number>): Uint8Array {
 function parseDepositHistoryItem(content: Uint8Array, timeDelayMs: bigint | null): DepositHistoryItem {
     const parsed = DepositRequest.parse(content);
     const approvalTimestampMs =
-        parsed.approval_timestamp_ms === null ? null : BigInt(parsed.approval_timestamp_ms);
+        parsed.approved_timestamp_ms === null ? null : BigInt(parsed.approved_timestamp_ms);
     return {
         kind: "deposit",
         requestId: parsed.id,
         sender: parsed.sender,
-        timestampMs: BigInt(parsed.timestamp_ms),
+        timestampMs: BigInt(parsed.created_timestamp_ms),
         suiTxDigest: base58.encode(new Uint8Array(parsed.sui_tx_digest)),
         amountSats: BigInt(parsed.utxo.amount),
         btcTxid: reverseTxidBytes(parsed.utxo.id.txid),
@@ -1635,7 +1635,7 @@ function parseWithdrawalHistoryItem(content: Uint8Array): WithdrawalHistoryItem 
         sender: parsed.sender,
         btcAmountSats: BigInt(parsed.btc_amount),
         bitcoinAddress: new Uint8Array(parsed.bitcoin_address),
-        timestampMs: BigInt(parsed.timestamp_ms),
+        timestampMs: BigInt(parsed.created_timestamp_ms),
         suiTxDigest: base58.encode(new Uint8Array(parsed.sui_tx_digest)),
         status: parsed.status.$kind as WithdrawalStatus,
         withdrawalTxnId: parsed.withdrawal_txn_id ?? null,

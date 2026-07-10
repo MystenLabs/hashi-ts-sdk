@@ -1,6 +1,15 @@
 /**************************************************************
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
+
+/**
+ * Governance proposal for enabling a package version. Once quorum is reached,
+ * `execute` marks the proposed version as enabled in `versioning`, re-admitting
+ * calls made through that version at entry points guarded by
+ * `assert_version_enabled` — the counterpart to `disable_version` for
+ * re-activating a previously disabled version.
+ */
+
 import { MoveStruct, normalizeMoveArguments, type RawTransactionArgument } from "../utils/index.js";
 import { bcs } from "@mysten/sui/bcs";
 import { type Transaction } from "@mysten/sui/transactions";
@@ -13,6 +22,7 @@ export const EnableVersion = new MoveStruct({
 });
 export interface ProposeArguments {
     hashi: RawTransactionArgument<string>;
+    validatorAddress: RawTransactionArgument<string>;
     version: RawTransactionArgument<number | bigint>;
     metadata: RawTransactionArgument<string>;
 }
@@ -22,14 +32,18 @@ export interface ProposeOptions {
         | ProposeArguments
         | [
               hashi: RawTransactionArgument<string>,
+              validatorAddress: RawTransactionArgument<string>,
               version: RawTransactionArgument<number | bigint>,
               metadata: RawTransactionArgument<string>,
           ];
 }
 export function propose(options: ProposeOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, "u64", null, "0x2::clock::Clock"] satisfies (string | null)[];
-    const parameterNames = ["hashi", "version", "metadata"];
+    const argumentsTypes = [null, "address", "u64", null, "0x2::clock::Clock"] satisfies (
+        | string
+        | null
+    )[];
+    const parameterNames = ["hashi", "validatorAddress", "version", "metadata"];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,

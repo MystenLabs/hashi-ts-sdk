@@ -2,7 +2,12 @@
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
 
-/** Module: validator */
+/**
+ * Validator registration and metadata maintenance. Entry points let a Sui
+ * validator register as a Hashi committee member and update its next-epoch BLS
+ * key, operator address, endpoint URL, TLS key, and next-epoch encryption key.
+ * Every mutation emits an event for off-chain watchers.
+ */
 
 import { MoveStruct, normalizeMoveArguments, type RawTransactionArgument } from "../utils/index.js";
 import { bcs } from "@mysten/sui/bcs";
@@ -27,6 +32,12 @@ export interface RegisterOptions {
     package?: string;
     arguments: RegisterArguments | [self: RawTransactionArgument<string>];
 }
+/**
+ * Registration and key/metadata updates (below) are deliberately NOT gated on
+ * pause/reconfig: operators must be able to rotate keys and prepare nodes while
+ * the system is paused, and blocking updates during reconfig would let a stalled
+ * reconfig freeze operator maintenance.
+ */
 export function register(options: RegisterOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
     const argumentsTypes = [null, "0x3::sui_system::SuiSystemState"] satisfies (string | null)[];

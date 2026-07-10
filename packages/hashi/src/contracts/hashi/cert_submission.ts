@@ -1,6 +1,15 @@
 /**************************************************************
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
+
+/**
+ * Entry points for submitting TOB dealer certificates. Committee members (or their
+ * delegated operators) post certified dealer-messages hashes for the DKG,
+ * key-rotation, and nonce-generation MPC ceremonies into per-(epoch, batch,
+ * protocol) buckets stored on `Hashi`, and garbage-collect buckets once they are
+ * old enough.
+ */
+
 import { type Transaction } from "@mysten/sui/transactions";
 import { normalizeMoveArguments, type RawTransactionArgument } from "../utils/index.js";
 export interface SubmitDkgCertArguments {
@@ -105,6 +114,7 @@ export interface DestroyAllCertsArguments {
     hashi: RawTransactionArgument<string>;
     epoch: RawTransactionArgument<number | bigint>;
     batchIndex: RawTransactionArgument<number | null>;
+    protocolType: RawTransactionArgument<string>;
 }
 export interface DestroyAllCertsOptions {
     package?: string;
@@ -114,12 +124,21 @@ export interface DestroyAllCertsOptions {
               hashi: RawTransactionArgument<string>,
               epoch: RawTransactionArgument<number | bigint>,
               batchIndex: RawTransactionArgument<number | null>,
+              protocolType: RawTransactionArgument<string>,
           ];
 }
+/**
+ * Garbage collection: deliberately NOT gated on pause/reconfig — cert buckets old
+ * enough to destroy (see `tob::destroy_all`) carry no live state, and GC must stay
+ * callable during an emergency pause.
+ */
 export function destroyAllCerts(options: DestroyAllCertsOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, "u64", "0x1::option::Option<u32>"] satisfies (string | null)[];
-    const parameterNames = ["hashi", "epoch", "batchIndex"];
+    const argumentsTypes = [null, "u64", "0x1::option::Option<u32>", null] satisfies (
+        | string
+        | null
+    )[];
+    const parameterNames = ["hashi", "epoch", "batchIndex", "protocolType"];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,

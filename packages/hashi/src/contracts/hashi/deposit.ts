@@ -1,6 +1,17 @@
 /**************************************************************
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
+
+/**
+ * User-facing Bitcoin deposit flow. A depositor registers the UTXO they sent to
+ * the bridge's address, the committee approves it with a certificate over
+ * `(request_id, utxo)`, and — after a configurable time delay in which a faulty
+ * approval can be caught and the service paused — the deposit is confirmed: hBTC
+ * is minted to the recipient encoded in the UTXO's derivation path and the UTXO
+ * joins the active pool. Requests that are never confirmed can be
+ * garbage-collected once they expire.
+ */
+
 import { MoveStruct, normalizeMoveArguments, type RawTransactionArgument } from "../utils/index.js";
 import { bcs } from "@mysten/sui/bcs";
 import { type Transaction } from "@mysten/sui/transactions";
@@ -17,8 +28,8 @@ export const DepositConfirmationMessage = new MoveStruct({
         utxo: utxo.Utxo,
     },
 });
-export const DepositRequestedEvent = new MoveStruct({
-    name: `${$moduleName}::DepositRequestedEvent`,
+export const DepositRequested = new MoveStruct({
+    name: `${$moduleName}::DepositRequested`,
     fields: {
         request_id: bcs.Address,
         utxo_id: utxo_1.UtxoId,
@@ -29,8 +40,8 @@ export const DepositRequestedEvent = new MoveStruct({
         sui_tx_digest: bcs.vector(bcs.u8()),
     },
 });
-export const DepositApprovedEvent = new MoveStruct({
-    name: `${$moduleName}::DepositApprovedEvent`,
+export const DepositApproved = new MoveStruct({
+    name: `${$moduleName}::DepositApproved`,
     fields: {
         request_id: bcs.Address,
         utxo: utxo_2.Utxo,
@@ -38,15 +49,15 @@ export const DepositApprovedEvent = new MoveStruct({
         approval_timestamp_ms: bcs.u64(),
     },
 });
-export const DepositConfirmedEvent = new MoveStruct({
-    name: `${$moduleName}::DepositConfirmedEvent`,
+export const DepositConfirmed = new MoveStruct({
+    name: `${$moduleName}::DepositConfirmed`,
     fields: {
         request_id: bcs.Address,
         utxo: utxo_3.Utxo,
     },
 });
-export const ExpiredDepositDeletedEvent = new MoveStruct({
-    name: `${$moduleName}::ExpiredDepositDeletedEvent`,
+export const ExpiredDepositDeleted = new MoveStruct({
+    name: `${$moduleName}::ExpiredDepositDeleted`,
     fields: {
         request_id: bcs.Address,
     },
@@ -156,6 +167,11 @@ export interface DeleteExpiredDepositOptions {
         | DeleteExpiredDepositArguments
         | [hashi: RawTransactionArgument<string>, requestId: RawTransactionArgument<string>];
 }
+/**
+ * Garbage collection: deliberately NOT gated on pause/reconfig — expiry refunds
+ * nothing (deposits mint on confirmation) and GC must stay callable during an
+ * emergency pause.
+ */
 export function deleteExpiredDeposit(options: DeleteExpiredDepositOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
     const argumentsTypes = [null, "address", "0x2::clock::Clock"] satisfies (string | null)[];

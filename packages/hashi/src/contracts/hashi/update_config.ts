@@ -1,6 +1,15 @@
 /**************************************************************
  * THIS FILE IS GENERATED AND SHOULD NOT BE MANUALLY MODIFIED *
  **************************************************************/
+
+/**
+ * Governance proposal for updating entries in the global config. A proposal
+ * carries a map of key/value entries; on execution every entry must refer to an
+ * existing key with a matching value type (and pass MPC-config range validation)
+ * before being upserted, so governance can tune parameters but never introduce
+ * unknown keys or change an entry's type.
+ */
+
 import { MoveStruct, normalizeMoveArguments, type RawTransactionArgument } from "../utils/index.js";
 import { bcs } from "@mysten/sui/bcs";
 import { type Transaction } from "@mysten/sui/transactions";
@@ -15,6 +24,7 @@ export const UpdateConfig = new MoveStruct({
 });
 export interface ProposeArguments {
     hashi: RawTransactionArgument<string>;
+    validatorAddress: RawTransactionArgument<string>;
     entries: RawTransactionArgument<string>;
     metadata: RawTransactionArgument<string>;
 }
@@ -24,14 +34,18 @@ export interface ProposeOptions {
         | ProposeArguments
         | [
               hashi: RawTransactionArgument<string>,
+              validatorAddress: RawTransactionArgument<string>,
               entries: RawTransactionArgument<string>,
               metadata: RawTransactionArgument<string>,
           ];
 }
 export function propose(options: ProposeOptions) {
     const packageAddress = options.package ?? "@local-pkg/hashi";
-    const argumentsTypes = [null, null, null, "0x2::clock::Clock"] satisfies (string | null)[];
-    const parameterNames = ["hashi", "entries", "metadata"];
+    const argumentsTypes = [null, "address", null, null, "0x2::clock::Clock"] satisfies (
+        | string
+        | null
+    )[];
+    const parameterNames = ["hashi", "validatorAddress", "entries", "metadata"];
     return (tx: Transaction) =>
         tx.moveCall({
             package: packageAddress,

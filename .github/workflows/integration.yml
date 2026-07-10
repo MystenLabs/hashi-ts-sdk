@@ -64,6 +64,10 @@ jobs:
           shared-key: hashi-${{ env.HASHI_PIN }}
 
       - name: Install Sui binary
+        # install-sui.sh queries the GitHub releases API with GITHUB_TOKEN
+        # (set -u, so it must be set) — mirrors the env in hashi's own ci.yml.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: bash hashi/.github/scripts/install-sui.sh
 
       # Mirrors the "Install Bitcoin Core" step in
