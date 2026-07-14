@@ -16,7 +16,7 @@ This repo is a pnpm workspace. The SDK lives in `packages/hashi/` so it can be l
 - `RELEASING.md` — how to cut a release (changeset workflow, first-time setup, OIDC trusted publisher).
 - `sonar-project.properties` — SonarQube configuration; sources/coverage paths point into `packages/hashi/`.
 - `.github/workflows/` — CI:
-  - `lint.yml`, `test.yml`, `sonarqube.yml` — formatting / unit tests / coverage on push/PR to `main`.
+  - `lint.yml`, `test.yml`, `sonarqube.yml` — formatting / unit tests / coverage on push/PR to `main`. SonarQube skips Dependabot-triggered runs (no access to `SONAR_TOKEN`).
   - `integration.yml` — full hashi-localnet stack (Sui localnet + BTC regtest + N validators with DKG) on push/PR to `main`, gated by a `paths` filter so it only fires when `packages/hashi/**`, the `hashi` submodule, `pnpm-lock.yaml`, or the workflow itself changes (SEDEFI-262); see SEDEFI-183 for the localnet design.
   - `changesets.yml` — push-to-main: opens "Version Packages" PR or publishes via OIDC.
   - `changesets-ci.yml`, `changesets-ci-comment.yml` — PR-time changeset enforcement (the butterfly comment).

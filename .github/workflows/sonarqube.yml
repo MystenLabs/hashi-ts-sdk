@@ -9,6 +9,9 @@ on:
 jobs:
   sonarqube:
     name: SonarQube
+    # Dependabot-triggered runs can't read Actions secrets, so the scan would
+    # always fail with an empty SONAR_TOKEN.
+    if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
