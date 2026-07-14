@@ -69,12 +69,12 @@ Two surfaces depending on where you run them.
 
 ## Networks
 
-Currently only Sui **devnet** is wired up (`packages/hashi/src/constants.ts`); BTC defaults to **signet**. Devnet support is **temporary** and will be deprecated in favor of:
+Sui **devnet** and **testnet** are wired up (`packages/hashi/src/constants.ts`); BTC defaults to **signet** on both. Devnet support is **temporary** and will be deprecated in favor of:
 
 - **testnet** — for end-to-end testing of SDK consumers (and our own real-network tests).
-- **mainnet** — for production DeFi consumers using the SDK against live BTC.
+- **mainnet** — for production DeFi consumers using the SDK against live BTC. Not yet deployed.
 
-Update `NETWORK_CONFIG` in `packages/hashi/src/constants.ts` when those network deployments land.
+Update `NETWORK_CONFIG` in `packages/hashi/src/constants.ts` when the mainnet deployment lands.
 
 ## Bitcoin Address Scheme
 

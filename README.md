@@ -7,7 +7,7 @@
 TypeScript SDK for the [Hashi](https://github.com/MystenLabs/hashi) protocol. Hashi is a decentralized Bitcoin collateralization primitive on Sui. Orchestrate native BTC directly from smart contracts—without centralized balance sheets.
 
 > [!WARNING]
-> **Not production-ready.** This SDK is pre-1.0 and under active development. The API may change without notice and only Sui devnet is wired up. Do not use it in production environments yet.
+> **Not production-ready.** This SDK is pre-1.0 and under active development. The API may change without notice and only Sui testnet and devnet are wired up. Do not use it in production environments yet.
 
 End-user actions only: **deposit**, **request withdrawal**, **cancel withdrawal**. Operator/committee/relayer calls are intentionally not part of this surface — those tools should import the generated bindings under `src/contracts/hashi/` directly.
 
@@ -29,14 +29,14 @@ import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { hashi } from "@mysten-incubation/hashi";
 
 const client = new SuiGrpcClient({
-  network: "devnet",
-  baseUrl: "https://fullnode.devnet.sui.io:443",
-}).$extend(hashi({ network: "devnet" }));
+  network: "testnet",
+  baseUrl: "https://fullnode.testnet.sui.io:443",
+}).$extend(hashi({ network: "testnet" }));
 
 const signer = Ed25519Keypair.fromSecretKey(/* … */);
 ```
 
-> **Network support.** Only Sui **devnet** is currently wired up (Bitcoin **signet** by default). Testnet and mainnet are not yet deployed; `hashi({ network: "testnet" })` will throw until those land. To target a custom or local deployment, pass `hashiObjectId`, `packageId`, and `bitcoinNetwork` explicitly.
+> **Network support.** Sui **testnet** and **devnet** are wired up (Bitcoin **signet** by default). Prefer testnet — devnet support is temporary and will be deprecated. Mainnet is not yet deployed; `hashi({ network: "mainnet" })` will throw until it lands. To target a custom or local deployment, pass `hashiObjectId`, `packageId`, and `bitcoinNetwork` explicitly.
 
 > **Optional client options.** `hashi({ ... })` also accepts `btcRpcUrl` — a Bitcoin Core JSON-RPC URL, required for the [`client.hashi.bitcoin.*`](#bitcoin-rpc-optional) lookups — and `graphqlUrl`, which overrides the Sui GraphQL endpoint used by [`transactionHistory`](#transaction-history) (defaults to `https://fullnode.{network}.sui.io:443/graphql`).
 
@@ -231,9 +231,9 @@ When the client is constructed with a `btcRpcUrl`, the `client.hashi.bitcoin.*` 
 
 ```ts
 const client = new SuiGrpcClient({
-  network: "devnet",
-  baseUrl: "https://fullnode.devnet.sui.io:443",
-}).$extend(hashi({ network: "devnet", btcRpcUrl: "http://user:pass@127.0.0.1:8332" }));
+  network: "testnet",
+  baseUrl: "https://fullnode.testnet.sui.io:443",
+}).$extend(hashi({ network: "testnet", btcRpcUrl: "http://user:pass@127.0.0.1:8332" }));
 
 // Which output(s) of the funding tx paid the deposit address?
 const output = await client.hashi.bitcoin.lookupVout(btcTxid, btcAddress);

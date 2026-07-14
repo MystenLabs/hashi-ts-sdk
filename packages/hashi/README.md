@@ -6,7 +6,7 @@ TypeScript SDK for the [Hashi](https://github.com/MystenLabs/hashi) protocol. Ha
 > **Pre-1.0:** This package is under active development. Minor versions may contain breaking changes until the API stabilizes at 1.0.
 
 > [!WARNING]
-> Only Sui **devnet** is currently wired up (Bitcoin **signet** by default). Testnet and mainnet are not yet deployed.
+> Sui **testnet** and **devnet** are wired up (Bitcoin **signet** by default). Prefer testnet — devnet support is temporary. Mainnet is not yet deployed.
 
 ## Install
 
@@ -26,9 +26,9 @@ import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { hashi } from "@mysten-incubation/hashi";
 
 const client = new SuiGrpcClient({
-  network: "devnet",
-  baseUrl: "https://fullnode.devnet.sui.io:443",
-}).$extend(hashi({ network: "devnet" }));
+  network: "testnet",
+  baseUrl: "https://fullnode.testnet.sui.io:443",
+}).$extend(hashi({ network: "testnet" }));
 
 const signer = Ed25519Keypair.fromSecretKey(/* … */);
 const recipient = signer.toSuiAddress();
