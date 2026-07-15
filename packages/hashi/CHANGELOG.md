@@ -1,5 +1,15 @@
 # @mysten-incubation/hashi
 
+## 0.5.0
+
+### Minor Changes
+
+- ff9a398: Wire up Sui testnet: add the testnet Hashi object and package ids to `NETWORK_CONFIG` (BTC signet), so `hashi({ network: "testnet" })` works out of the box
+
+### Patch Changes
+
+- ff9a398: Bump hashi submodule to cd2b81f (no contract or binding changes)
+
 ## 0.4.0
 
 ### Minor Changes
