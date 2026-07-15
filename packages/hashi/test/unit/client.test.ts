@@ -752,14 +752,14 @@ describe("HashiClient", () => {
         it.todo("requests BTC from the signet faucet");
     });
 
-    describe("unsupported networks", () => {
-        it("throws for testnet without a custom hashiObjectId", () => {
+    describe("network support", () => {
+        it("resolves testnet from NETWORK_CONFIG without custom ids", () => {
             expect(() =>
                 new SuiGrpcClient({
                     network: "testnet",
                     baseUrl: "https://fullnode.testnet.sui.io:443",
                 }).$extend(hashi({ network: "testnet" })),
-            ).toThrow("not yet supported on Sui testnet");
+            ).not.toThrow();
         });
 
         it("throws for mainnet without a custom hashiObjectId", () => {
@@ -774,11 +774,11 @@ describe("HashiClient", () => {
         it("allows unsupported networks with a custom hashiObjectId and packageId", () => {
             expect(() =>
                 new SuiGrpcClient({
-                    network: "testnet",
-                    baseUrl: "https://fullnode.testnet.sui.io:443",
+                    network: "mainnet",
+                    baseUrl: "https://fullnode.mainnet.sui.io:443",
                 }).$extend(
                     hashi({
-                        network: "testnet",
+                        network: "mainnet",
                         hashiObjectId: HASHI_OBJECT_ID,
                         packageId: PACKAGE_ID,
                     }),

@@ -45,4 +45,9 @@ export const NETWORK_CONFIG: Partial<Record<SuiNetwork, NetworkConfig>> = {
         packageId: "0xa877d4d97b6a8bae1da982a84980c502c5ad2ead4b24e6c8e50c57cd6ddc3771",
         bitcoinNetwork: "signet",
     },
+    testnet: {
+        hashiObjectId: "0x22c0ce66ce09df2dc88a31bd320d4177b766518b9b88010368cfbdcd724528f8",
+        packageId: "0xfcea10cadbb553c4874201584abf68771592678952efd957b2e82c010c7f4360",
+        bitcoinNetwork: "signet",
+    },
 };
