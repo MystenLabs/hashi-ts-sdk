@@ -1,5 +1,11 @@
 # @mysten-incubation/hashi
 
+## 0.5.1
+
+### Patch Changes
+
+- 56703b6: Point default GraphQL URLs at the dedicated graphql.<network>.sui.io hosts. The fullnode-served /graphql endpoints are being retired — testnet already returns 404, which silently emptied the pending-request portion of `view.transactionHistory`. That failure now also logs a console warning instead of being swallowed.
+
 ## 0.5.0
 
 ### Minor Changes
