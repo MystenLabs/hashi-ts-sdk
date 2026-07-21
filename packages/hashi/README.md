@@ -1,9 +1,12 @@
 # @mysten-incubation/hashi
 
-TypeScript SDK for the [Hashi](https://github.com/MystenLabs/hashi) protocol. Hashi is a decentralized Bitcoin collateralization primitive on Sui. Orchestrate native BTC directly from smart contracts—without centralized balance sheets.
-
 > [!CAUTION]
-> **Pre-1.0:** This package is under active development. Minor versions may contain breaking changes until the API stabilizes at 1.0.
+>
+> # ⚠️ This package is no longer active
+>
+> Hashi SDK development has moved to [`MystenLabs/ts-sdks`](https://github.com/MystenLabs/ts-sdks/tree/main/packages/hashi) — the code has been transferred there. Use that package instead; this one will not receive further updates.
+
+TypeScript SDK for the [Hashi](https://github.com/MystenLabs/hashi) protocol. Hashi is a decentralized Bitcoin collateralization primitive on Sui. Orchestrate native BTC directly from smart contracts—without centralized balance sheets.
 
 > [!WARNING]
 > Sui **testnet** and **devnet** are wired up (Bitcoin **signet** by default). Prefer testnet — devnet support is temporary. Mainnet is not yet deployed.
