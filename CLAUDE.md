@@ -2,6 +2,8 @@
 
 TypeScript SDK for interacting with the Hashi Sui Move smart contracts.
 
+**This repository is no longer active.** The SDK graduated to [`MystenLabs/ts-sdks`](https://github.com/MystenLabs/ts-sdks/tree/main/packages/hashi); development continues there. This repo is kept for historical reference.
+
 ## Structure
 
 This repo is a pnpm workspace. The SDK lives in `packages/hashi/` so it can be lifted into [`MystenLabs/ts-sdks`](https://github.com/MystenLabs/ts-sdks) at graduation with no path rewrites.

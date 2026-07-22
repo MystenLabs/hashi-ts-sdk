@@ -4,10 +4,13 @@
 [![Test](https://github.com/MystenLabs/hashi-ts-sdk/actions/workflows/test.yml/badge.svg)](https://github.com/MystenLabs/hashi-ts-sdk/actions/workflows/test.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-TypeScript SDK for the [Hashi](https://github.com/MystenLabs/hashi) protocol. Hashi is a decentralized Bitcoin collateralization primitive on Sui. Orchestrate native BTC directly from smart contracts—without centralized balance sheets.
+> [!CAUTION]
+>
+> # ⚠️ This repository is no longer active
+>
+> Hashi SDK development has moved to [`MystenLabs/ts-sdks`](https://github.com/MystenLabs/ts-sdks/tree/main/packages/hashi) — the code has been transferred there. Use that package instead; this repository will not receive further updates and is kept for historical reference only.
 
-> [!WARNING]
-> **Not production-ready.** This SDK is pre-1.0 and under active development. The API might change without notice, and the SDK only supports Sui Testnet and Devnet. Do not use it in production environments yet.
+TypeScript SDK for the [Hashi](https://github.com/MystenLabs/hashi) protocol. Hashi is a decentralized Bitcoin collateralization primitive on Sui. Orchestrate native BTC directly from smart contracts—without centralized balance sheets.
 
 End-user actions only: **deposit**, **request withdrawal**, **cancel withdrawal**. Operator/committee/relayer calls are intentionally not part of this surface — those tools should import the generated bindings under `src/contracts/hashi/` directly.
 
