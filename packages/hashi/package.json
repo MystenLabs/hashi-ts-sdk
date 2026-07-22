@@ -1,6 +1,6 @@
 {
     "name": "@mysten-incubation/hashi",
-    "version": "0.5.1",
+    "version": "0.5.2",
     "description": "TypeScript SDK for the Hashi Sui Move smart contracts",
     "license": "Apache-2.0",
     "author": "Mysten Labs <build@mystenlabs.com>",

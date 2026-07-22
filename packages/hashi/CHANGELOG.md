@@ -1,5 +1,11 @@
 # @mysten-incubation/hashi
 
+## 0.5.2
+
+### Patch Changes
+
+- 6ca4235: Add a deprecation notice to the READMEs: this repository is no longer active — use https://github.com/MystenLabs/ts-sdks/tree/main/packages/hashi instead.
+
 ## 0.5.1
 
 ### Patch Changes
